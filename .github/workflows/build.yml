@@ -19,8 +19,14 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      # NOTE: do NOT use android-actions/setup-android — its v3 default runs
+      # `sdkmanager tools`, and Google removed the legacy `tools` package,
+      # so that step fails with exit 1. ubuntu-latest runners already ship
+      # an Android SDK ($ANDROID_HOME); install only the packages we need.
+      - name: Install Android SDK packages
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-34" "build-tools;34.0.0"
 
       - name: Build debug APK
         run: ./gradlew assembleDebug --no-daemon
