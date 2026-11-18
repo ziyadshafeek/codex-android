@@ -7,7 +7,9 @@ import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
@@ -70,7 +72,7 @@ object EchoTool : Tool {
                 put("description", "Text to echo")
             }
         }
-        putJsonArray("required") { add("text") }
+        putJsonArray("required") { add(JsonPrimitive("text")) }
     }
     override val sensitive: Boolean = false
 
@@ -97,7 +99,7 @@ class OpenAppTool(private val context: Context) : Tool {
                 put("description", "Package name of the app to open, e.g. com.example.app")
             }
         }
-        putJsonArray("required") { add("package_name") }
+        putJsonArray("required") { add(JsonPrimitive("package_name")) }
     }
     override val sensitive: Boolean = false
 
