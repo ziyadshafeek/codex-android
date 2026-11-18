@@ -70,11 +70,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         if (goal.isBlank()) return
         if (_isRunning.value) return
         append(ChatUiMessage("user", goal))
-        if (!_hasKey.value) {
+        if (!_hasKey.value || keyStore.getBaseUrl().isBlank()) {
             append(
                 ChatUiMessage(
                     "system",
-                    "Add your API key in Settings first — the app never ships with a key.",
+                    "Add your API endpoint and key in Settings first — the app never ships with a key or a provider.",
                     isError = true
                 )
             )

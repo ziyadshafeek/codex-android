@@ -30,7 +30,7 @@ The APK lands at `app/build/outputs/apk/debug/app-debug.apk`.
 
 ## BYOK — keys are never shipped
 
-Build/development keys (Coarena and others) are used only during development and are **never** compiled into the app. The shipped app talks to an OpenAI-compatible API using a key the end user provides, or an endpoint they configure.
+Build/development is driven directly by the Nyx agent — no third-party API key is used during development and none is ever compiled into the app. The shipped app talks to an OpenAI-compatible API using a key the end user provides, or an endpoint they configure.
 
 ## Package id
 

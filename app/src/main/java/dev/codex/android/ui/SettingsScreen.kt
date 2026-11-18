@@ -107,9 +107,8 @@ fun SettingsScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
             Text(
                 text = "Your key is stored encrypted on this device only (BYOK). " +
                     "It is sent only to the API endpoint above. " +
-                    "The app ships with no key. " +
-                    "Default endpoint is Coarena (https://coarena.ai/api/v1) — " +
-                    "you can point it at any OpenAI-compatible API.",
+                    "The app ships with no key and no default provider. " +
+                    "Enter any OpenAI-compatible API base URL and your key for it.",
                 style = MaterialTheme.typography.bodyMedium
             )
         }

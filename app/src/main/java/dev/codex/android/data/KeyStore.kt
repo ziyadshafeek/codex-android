@@ -22,7 +22,12 @@ import androidx.security.crypto.MasterKey
 class KeyStore(context: Context) {
 
     companion object {
-        const val DEFAULT_BASE_URL = "https://coarena.ai/api/v1"
+        /**
+         * No default endpoint is baked in. The user enters their own
+         * OpenAI-compatible API base URL in Settings (BYOK).
+         * An empty base URL means "not configured yet".
+         */
+        const val DEFAULT_BASE_URL = ""
         const val DEFAULT_MODEL = "gpt-4o-mini"
 
         private const val PREFS_FILE = "codex_keys"
@@ -70,7 +75,7 @@ class KeyStore(context: Context) {
         prefs.edit().remove(KEY_API_KEY).apply()
     }
 
-    /** The stored base URL, or [DEFAULT_BASE_URL] when none is stored or it is blank. */
+    /** The stored base URL, or "" when none is stored or it is blank. */
     fun getBaseUrl(): String =
         prefs.getString(KEY_BASE_URL, null)?.takeIf { it.isNotBlank() } ?: DEFAULT_BASE_URL
 

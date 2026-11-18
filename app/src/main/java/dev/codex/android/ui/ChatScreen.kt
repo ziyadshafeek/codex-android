@@ -120,7 +120,7 @@ fun ChatScreen(viewModel: ChatViewModel, onOpenSettings: () -> Unit) {
             }
             if (!hasKey) {
                 Text(
-                    text = "No API key set — open Settings to add yours.",
+                    text = "No API endpoint or key set — open Settings to add yours.",
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 12.dp, vertical = 4.dp),
