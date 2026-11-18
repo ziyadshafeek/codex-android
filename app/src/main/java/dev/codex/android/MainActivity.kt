@@ -3,58 +3,47 @@ package dev.codex.android
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
+import androidx.activity.viewModels
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
+import dev.codex.android.ui.ChatScreen
+import dev.codex.android.ui.ChatViewModel
+import dev.codex.android.ui.SettingsScreen
 
 /**
- * Phase 0 entry point: a minimal Compose hello-world screen.
- * The agent runtime, API client, and background services land in later phases.
+ * Phase 1 entry point: a chat UI wired to the agent loop, plus a settings
+ * screen for the user's own API key (BYOK). No key is ever shipped.
  */
 class MainActivity : ComponentActivity() {
+    private val viewModel: ChatViewModel by viewModels()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            CodexApp()
-        }
-    }
-}
-
-@Composable
-fun CodexApp() {
-    MaterialTheme {
-        Surface(
-            modifier = Modifier.fillMaxSize(),
-            color = MaterialTheme.colorScheme.background
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(24.dp),
-                verticalArrangement = Arrangement.Center
-            ) {
-                Text(
-                    text = "Codex",
-                    style = MaterialTheme.typography.headlineLarge
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    text = "Phase 0 — toolchain check: the build works, the agent runtime lands next."
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    text = "Status: skeleton only. No agent, no API calls, no background service yet.",
-                    style = MaterialTheme.typography.bodySmall
-                )
+            MaterialTheme {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
+                    var showSettings by remember { mutableStateOf(false) }
+                    if (showSettings) {
+                        SettingsScreen(
+                            viewModel = viewModel,
+                            onBack = { showSettings = false },
+                        )
+                    } else {
+                        ChatScreen(
+                            viewModel = viewModel,
+                            onOpenSettings = { showSettings = true },
+                        )
+                    }
+                }
             }
         }
     }
