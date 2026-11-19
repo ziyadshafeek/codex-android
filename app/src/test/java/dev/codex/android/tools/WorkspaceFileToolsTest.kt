@@ -1,5 +1,7 @@
 package dev.codex.android.tools
 
+import dev.codex.android.linux.ProotShellEngine
+import dev.codex.android.linux.ShellResult
 import java.io.File
 import java.nio.file.Files
 import org.junit.After
@@ -204,5 +206,59 @@ class WorkspaceFileToolsTest {
         assertTrue(result.contains("search.txt:2: needle here"))
         assertFalse(result.contains("other.txt"))
         assertEquals("No matches for 'zzz'", tools.searchText("zzz"))
+    }
+
+    // --- Post-edit loop (ProotShellEngine wired) ---
+
+    /**
+     * Fake runtime: records every post-edit shell command and answers
+     * 127 (binary not installed), so the report degrades to a one-line
+     * "skipped" note instead of failing the edit. The real
+     * [ProotShellEngine] constructor does no I/O, so this runs on the
+     * plain JVM.
+     */
+    private class RecordingProotEngine : ProotShellEngine(File("rootfs"), File("nativeLib")) {
+        val commands = mutableListOf<String>()
+
+        override suspend fun shellExec(command: String, timeoutMs: Long): ShellResult {
+            commands += command
+            return ShellResult(exitCode = 127, stdout = "", stderr = "")
+        }
+    }
+
+    @Test
+    fun writeFile_withProot_runsPostEditAndAppendsReport() {
+        val engine = RecordingProotEngine()
+        val wired = WorkspaceFileTools(tempDir, proot = engine)
+        val result = wired.writeFile("script.py", "x = 1\n")
+        // Edit itself succeeded and the file holds the new content.
+        assertTrue(wired.readFile("script.py").contains("x = 1"))
+        // Post-edit ran (ruff format + pyright probes) and its report
+        // is appended; a 127 degrades to "skipped", never an error.
+        assertTrue(engine.commands.isNotEmpty())
+        assertTrue(result.contains("[Post-Edit Quality Loop]"))
+        assertTrue(result.contains("Formatter: skipped (ruff not installed in rootfs)"))
+        assertTrue(result.contains("LSP: skipped (pyright not installed in rootfs)"))
+    }
+
+    @Test
+    fun applyPatch_withProot_runsPostEdit() {
+        val engine = RecordingProotEngine()
+        val wired = WorkspaceFileTools(tempDir, proot = engine)
+        wired.writeFile("app.py", "a = 1\n")
+        engine.commands.clear()
+        val result = wired.applyPatch("app.py", "a = 1", "a = 2")
+        assertTrue(result.startsWith("Patched app.py"))
+        assertTrue(result.contains("[Post-Edit Quality Loop]"))
+        assertTrue(engine.commands.isNotEmpty())
+        assertTrue(wired.readFile("app.py").contains("a = 2"))
+    }
+
+    @Test
+    fun writeFile_withoutProot_hasNoPostEditSuffix() {
+        // Default construction (no runtime): the result is exactly the
+        // historic string — existing callers and tests are unaffected.
+        val result = tools.writeFile("plain.txt", "hello\n")
+        assertEquals("Wrote 6 chars to plain.txt", result)
     }
 }

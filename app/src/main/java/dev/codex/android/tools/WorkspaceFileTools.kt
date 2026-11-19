@@ -1,5 +1,9 @@
 package dev.codex.android.tools
 
+import dev.codex.android.editor.PostEditToolchain
+import dev.codex.android.linux.ProotShellEngine
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import java.io.File
 
 data class FileChangeSummary(
@@ -10,9 +14,21 @@ data class FileChangeSummary(
     val isNewFile: Boolean,
 )
 
-class WorkspaceFileTools(workspaceDir: File) {
+/**
+ * File tools for one workspace root. [proot] (nullable) is the Linux
+ * runtime the post-edit formatter + diagnostics loop runs through
+ * after every successful write; with no runtime wired it stays null
+ * and edits behave exactly as before (no post-edit step).
+ */
+class WorkspaceFileTools(
+    workspaceDir: File,
+    private val proot: ProotShellEngine? = null,
+) {
 
     private val rootCanonical: File = workspaceDir.apply { mkdirs() }.canonicalFile
+
+    /** Canonical workspace root, so the editor can open real files under it. */
+    val rootDir: File get() = rootCanonical
 
     // Maps relative path -> original file text before first edit (null = file did not exist).
     // Plain HashMap, NOT ConcurrentHashMap: ConcurrentHashMap forbids null values,
@@ -75,7 +91,23 @@ class WorkspaceFileTools(workspaceDir: File) {
         snapshotIfNeeded(file)
         file.parentFile?.mkdirs()
         file.writeText(content)
-        return "Wrote ${content.length} chars to ${relPath(file)}"
+        return "Wrote ${content.length} chars to ${relPath(file)}" + runPostEdit(file)
+    }
+
+    /**
+     * Post-edit formatter + diagnostics for a just-written [file], on a
+     * best-effort basis. Returns the report suffix for the tool result
+     * ("" when no runtime is wired). Never throws and never fails the
+     * edit: a missing runtime, a failed formatter, or a failed
+     * diagnostics run degrades to a one-line note inside the report.
+     */
+    private fun runPostEdit(file: File): String {
+        val engine = proot ?: return ""
+        return runCatching {
+            runBlocking(Dispatchers.IO) {
+                PostEditToolchain.runPostEdit(engine, file, "/workspace/${relPath(file)}")
+            }.toToolResultSuffix()
+        }.getOrDefault("")
     }
 
     /**
@@ -107,7 +139,7 @@ class WorkspaceFileTools(workspaceDir: File) {
         }
         snapshotIfNeeded(file)
         file.writeText(current.replaceFirst(oldSnippet, newSnippet))
-        return "Patched ${relPath(file)}"
+        return "Patched ${relPath(file)}" + runPostEdit(file)
     }
 
     fun listFiles(relativeDir: String = "", maxResults: Int = 200): List<String> {

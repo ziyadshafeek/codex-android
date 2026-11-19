@@ -93,12 +93,11 @@ class DatabaseThreadStore(private val database: CodexDatabase) : DaemonThreadSto
  * call site, so the context is a plain parameter here) with
  * `nextStepOrThrow` / `emitAssistantDelta` / `drainSteeringMessages` /
  * `requestApproval`.
- * That function is private to `ChatViewModel` in the repo, so it cannot
- * be reused directly — the integrator must extract it (or an
- * equivalent) into a shared helper and supply it here. Until one is
- * supplied, turns are accepted and the runner returns the "no runner
- * wired" message below, which `AgentRuntime` records as the turn's
- * assistant reply (a loud, visible failure, never a silent no-op).
+ * That pattern is extracted as [dev.codex.android.subagents.DefaultSubagentLoopFactory];
+ * the DI root supplies it through [DaemonAgentRunnerFactory], so daemon
+ * turns run the real loop. A null [AgentRunnerFactory] is still
+ * accepted (loud "no runner wired" reply below) so the seam stays
+ * JVM-testable without an Android `Context`.
  */
 fun interface AgentRunnerFactory {
     suspend fun runTurn(
@@ -182,9 +181,9 @@ class LocalDaemon(
     /**
      * DI-root constructor: wires the real database and runtime.
      * `context` is required — the real `AgentRuntime.startTurn`
-     * needs it. Supply [runnerFactory] from the ChatViewModel
-     * AgentLoop pattern (see [AgentRunnerFactory]); without one,
-     * turns are accepted but run no agent (loudly, see above).
+     * needs it. Supply [runnerFactory] as [DaemonAgentRunnerFactory]
+     * (the real AgentLoop); without one, turns are accepted but run
+     * no agent (loudly, see above).
      */
     constructor(
         context: Context,
