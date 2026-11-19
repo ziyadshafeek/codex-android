@@ -1,0 +1,75 @@
+package dev.codex.android.store
+
+import android.content.Context
+import dev.codex.android.core.CodexJson
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.encodeToString
+import java.io.File
+
+/**
+ * Persists the store catalogue ([StoreListing]s) as JSON in the app's
+ * private files dir. Same pattern as [dev.codex.android.agent.PlanStore]:
+ * never throws — a corrupt or missing file simply yields an empty list,
+ * and a failed save is swallowed (the in-memory state still works).
+ *
+ * Payments are a stub only: listings carry an integer-paise price, but
+ * no payment provider, SDK, or charging exists anywhere in the store.
+ */
+class StoreCatalog(context: Context) {
+
+    private val file: File = File(context.filesDir, "codex_store.json")
+
+    /** Loads all listings, or an empty list when none exist / on error. Never throws. */
+    private suspend fun loadAll(): List<StoreListing> = withContext(Dispatchers.IO) {
+        try {
+            if (!file.exists()) return@withContext emptyList()
+            val raw = file.readText()
+            if (raw.isBlank()) return@withContext emptyList()
+            CodexJson.decodeFromString<List<StoreListing>>(raw)
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    /** Writes the full listing list. Never throws. */
+    private suspend fun saveAll(listings: List<StoreListing>) = withContext(Dispatchers.IO) {
+        try {
+            val raw = CodexJson.encodeToString(listings)
+            file.writeText(raw)
+        } catch (e: Exception) {
+            // Swallowed by design — persistence must never break a run.
+        }
+    }
+
+    /** All listings, in insertion order. Empty list on error/missing file. Never throws. */
+    suspend fun all(): List<StoreListing> = loadAll()
+
+    /** Approved listings only (approved == true), newest first. Never throws. */
+    suspend fun approved(): List<StoreListing> =
+        loadAll().filter { it.approved }.sortedByDescending { it.createdAtMillis }
+
+    /** Listings awaiting moderation (approved == false), newest first. Never throws. */
+    suspend fun pending(): List<StoreListing> =
+        loadAll().filter { !it.approved }.sortedByDescending { it.createdAtMillis }
+
+    /** Inserts or replaces [listing] by id. Never throws. */
+    suspend fun save(listing: StoreListing) {
+        val updated = loadAll().filter { it.id != listing.id } + listing
+        saveAll(updated)
+    }
+
+    /** Marks the listing with [id] as approved. No-op when missing. Never throws. */
+    suspend fun approve(id: String) {
+        val listings = loadAll()
+        if (listings.none { it.id == id }) return
+        saveAll(listings.map { if (it.id == id) it.copy(approved = true) else it })
+    }
+
+    /** Deletes the listing with [id]. No-op when missing. Never throws. */
+    suspend fun remove(id: String) {
+        val listings = loadAll()
+        if (listings.none { it.id == id }) return
+        saveAll(listings.filter { it.id != id })
+    }
+}

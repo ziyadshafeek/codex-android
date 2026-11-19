@@ -37,6 +37,7 @@ fun ChatScreen(
     viewModel: ChatViewModel,
     onOpenSettings: () -> Unit,
     onOpenHistory: () -> Unit,
+    onOpenStore: () -> Unit,
 ) {
     val messages by viewModel.messages.collectAsState()
     val isRunning by viewModel.isRunning.collectAsState()
@@ -58,6 +59,9 @@ fun ChatScreen(
                 actions = {
                     TextButton(onClick = onOpenHistory) {
                         Text("History")
+                    }
+                    TextButton(onClick = onOpenStore) {
+                        Text("Store")
                     }
                     TextButton(onClick = onOpenSettings) {
                         Text("Settings")

@@ -86,6 +86,8 @@ class ToolRegistry {
                 register(GoBackTool)
                 register(PressHomeTool)
                 register(ScheduleTaskTool(context))
+                register(GenerateAppTool(context))
+                register(ListStoreTool(context))
             }
     }
 }

@@ -54,3 +54,9 @@ The target is phones with 3–4 GB RAM, 8 cores or fewer, Android 8+ (minSdk 26)
 Device detection (`dev.codex.android.util.DeviceProfile`) uses `ActivityManager.isLowRamDevice` and total RAM: LOW when the OS flags low-RAM or total RAM is under 4 GB, HIGH when RAM is 8 GB+ and there are 8+ cores, otherwise MEDIUM. Detection never crashes — any failure degrades to MEDIUM. The agent loop's turn budget is likewise scaled by device class in `PerformancePolicy.maxTurns` (8 on LOW, 12 otherwise), as the documented default for a future wiring; the loop currently still hardcodes 12.
 
 **Not yet verified on a low-end device:** kill-and-resume, exact-alarm delivery, and tap/scroll timing on a real low-end phone. These have not been tested on real low-end hardware — stated plainly, not assumed.
+
+## Mini app store (Phase 6)
+
+The agent can generate small apps from three templates (counter, notes, timer) and list them in a local store catalogue with a price in INR and a moderation flag (approved / pending). The APK build runs on a build service, not on the phone.
+
+Payments are NOT live: the Buy button shows a "Payments are not live yet" dialog, and real payments and publishing are future work. The store is a skeleton, not a marketplace.

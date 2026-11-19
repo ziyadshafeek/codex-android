@@ -18,6 +18,7 @@ import dev.codex.android.ui.ChatViewModel
 import dev.codex.android.ui.HistoryScreen
 import dev.codex.android.ui.OnboardingScreen
 import dev.codex.android.ui.SettingsScreen
+import dev.codex.android.ui.StoreScreen
 
 /**
  * Phase 1 entry point: a chat UI wired to the agent loop, plus a settings
@@ -46,6 +47,7 @@ class MainActivity : ComponentActivity() {
                     }
                     var showSettings by remember { mutableStateOf(false) }
                     var showHistory by remember { mutableStateOf(false) }
+                    var showStore by remember { mutableStateOf(false) }
                     when {
                         showOnboarding -> {
                             OnboardingScreen(
@@ -61,6 +63,11 @@ class MainActivity : ComponentActivity() {
                                 onBack = { showHistory = false }
                             )
                         }
+                        showStore -> {
+                            StoreScreen(
+                                onBack = { showStore = false }
+                            )
+                        }
                         showSettings -> {
                             SettingsScreen(
                                 viewModel = viewModel,
@@ -72,6 +79,7 @@ class MainActivity : ComponentActivity() {
                                 viewModel = viewModel,
                                 onOpenSettings = { showSettings = true },
                                 onOpenHistory = { showHistory = true },
+                                onOpenStore = { showStore = true },
                             )
                         }
                     }
