@@ -210,6 +210,9 @@ fun SettingsScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
                     "kill it even with battery exemption.",
                 style = MaterialTheme.typography.bodyMedium
             )
+            Spacer(modifier = Modifier.height(24.dp))
+            // Voluntary tip for the developer. Unlocks nothing.
+            SupportCodexSection()
         }
     }
 }

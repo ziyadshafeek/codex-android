@@ -88,6 +88,15 @@ class ToolRegistry {
                 register(ScheduleTaskTool(context))
                 register(GenerateAppTool(context))
                 register(ListStoreTool(context))
+                // Filler (other AI): question / todo / web tools. The web
+                // search endpoint + key are blank until a BYOK search
+                // setting exists in KeyStore — the tool then reports
+                // itself unconfigured rather than calling anything.
+                register(QuestionTool)
+                register(TodoWriteTool(context))
+                register(TodoReadTool(context))
+                register(WebFetchTool())
+                register(WebSearchTool(endpoint = "", apiKey = ""))
             }
     }
 }
