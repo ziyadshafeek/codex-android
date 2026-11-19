@@ -431,16 +431,6 @@ class VerificationBrowser(context: Context) {
      * [BrowserJs.normalizeUrl]) and returns the normalised URL that was
      * actually loaded. Safe to call from any thread; runs on Main.
      */
-    /**
-     * Releases the WebView. Call from the main thread when the owning
-     * Activity is destroyed (or its composition is disposed) — a
-     * WebView that is never destroyed leaks its renderer process and
-     * memory, including across configuration changes.
-     */
-    fun destroy() {
-        runCatching { webView.destroy() }
-    }
-
     suspend fun loadUrl(rawUrl: String): String = withContext(Dispatchers.Main) {
         val normalized = BrowserJs.normalizeUrl(rawUrl)
         if (normalized.isNotEmpty()) {
@@ -557,7 +547,12 @@ class VerificationBrowser(context: Context) {
         _consoleLogs.value = emptyList()
     }
 
-    /** Stops loading, detaches the JS bridge and destroys the WebView. */
+    /**
+     * Stops loading, detaches the JS bridge and destroys the WebView.
+     * The teardown entry point: MainActivity calls this from onDestroy
+     * (a WebView that is never destroyed leaks its renderer process and
+     * memory, including across configuration changes). Best-effort.
+     */
     suspend fun destroy() = withContext(Dispatchers.Main) {
         try {
             webView.stopLoading()

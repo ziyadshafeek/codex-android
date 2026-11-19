@@ -5,12 +5,15 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -56,6 +59,30 @@ import java.util.UUID
  */
 class MainActivity : ComponentActivity() {
     private val viewModel: ChatViewModel by viewModels()
+
+    /**
+     * The shared browser, for teardown in [onDestroy]: its WebView must
+     * be destroyed (the existing suspend VerificationBrowser.destroy(),
+     * which also detaches the JS bridge) or its renderer process leaks
+     * across configuration changes and activity restarts.
+     */
+    private var browserRef: VerificationBrowser? = null
+
+    override fun onDestroy() {
+        browserRef?.let { browser ->
+            // UNDISPATCHED: lifecycleScope is cancelled when the lifecycle
+            // reaches DESTROYED (right after super.onDestroy()), so a
+            // normally-dispatched launch would be cancelled before it ever
+            // runs. Undispatched starts on this (main) thread at once, and
+            // destroy()'s withContext(Main) runs inline here — the WebView
+            // is really torn down before the activity finishes destroying.
+            lifecycleScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                browser.destroy()
+            }
+        }
+        browserRef = null
+        super.onDestroy()
+    }
     // Lazy: `application` is only set after attach(), i.e. after field
     // initialisers run, so an eager OnboardingPrefs(application) would NPE.
     private val onboardingPrefs by lazy { OnboardingPrefs(application) }
@@ -84,12 +111,8 @@ class MainActivity : ComponentActivity() {
                     // created on the main thread and shared by the
                     // Preview tab and the agent's browser tools.
                     val browser = remember { VerificationBrowser(applicationContext) }
-                    // Release the browser's WebView when this composition
-                    // goes away (activity destroyed, or a configuration
-                    // change) — otherwise the old WebView leaks.
-                    DisposableEffect(browser) {
-                        onDispose { browser.destroy() }
-                    }
+                    // Publish the shared browser for onDestroy teardown.
+                    SideEffect { browserRef = browser }
                     // Composition root for the workbench engines (M2/M4/M6):
                     // one workspace dir shared by the file tools, the
                     // context engine, the knowledge base and the hook
