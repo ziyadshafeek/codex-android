@@ -51,13 +51,6 @@ android {
     }
 }
 
-// Keep debug symbols for the PRoot native binaries (top-level: the
-// androidComponents extension is not available inside the android {} block).
-androidComponents {
-    onVariants { variant ->
-        variant.packaging.keepDebugSymbols.add("**/libproot*.so")
-    }
-}
 
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
