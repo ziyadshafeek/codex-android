@@ -79,6 +79,12 @@ class ToolRegistry {
                 register(DeviceInfoTool)
                 register(EchoTool)
                 register(OpenAppTool(context))
+                register(TapTool)
+                register(TypeTextTool)
+                register(ReadScreenTool)
+                register(ScrollTool)
+                register(GoBackTool)
+                register(PressHomeTool)
             }
     }
 }
