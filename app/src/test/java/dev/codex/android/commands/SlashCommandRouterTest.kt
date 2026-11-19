@@ -172,7 +172,7 @@ class SlashCommandRouterTest {
             SlashCommandRouter.autocomplete("m").map { it.name },
         )
         assertEquals(
-            listOf("plugins"),
+            listOf("plan", "plugins"),
             SlashCommandRouter.autocomplete("/pl").map { it.name },
         )
         assertEquals(

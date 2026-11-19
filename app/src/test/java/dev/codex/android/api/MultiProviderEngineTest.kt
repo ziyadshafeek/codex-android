@@ -81,6 +81,7 @@ class MultiProviderEngineTest {
                         .protocol(Protocol.HTTP_1_1)
                         .code(code)
                         .message("fake")
+                        .header("Content-Type", contentType)
                         .body(body.toResponseBody(contentType.toMediaType()))
                         .build()
                 },
