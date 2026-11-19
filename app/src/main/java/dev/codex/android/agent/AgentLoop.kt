@@ -86,7 +86,7 @@ class AgentLoop(
      * lost.
      */
     suspend fun run(goal: String, events: FlowCollector<AgentEvent>): String =
-        runWithSink(goal) { emitEvent(it) }
+        runWithSink(goal) { events.emit(it) }
 
     private suspend fun runWithSink(
         goal: String,
