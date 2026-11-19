@@ -75,9 +75,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 _history.value = recent
                     .filter { it.role == "user" }
                     .sortedByDescending { it.createdAtMillis }
-                    .distinctBy { it.text }
+                    .distinctBy { it.content }
                     .take(50)
-                    .map { HistoryEntry(it.text, it.createdAtMillis) }
+                    .map { HistoryEntry(it.content, it.createdAtMillis) }
                 // Chat restore keeps its old behaviour: newest 20 only.
                 val restore = recent.takeLast(20)
                 if (restore.isNotEmpty()) {
