@@ -124,7 +124,7 @@ class QuestionToolTest {
 
     @Test
     fun pending_fifoOrderAcrossMultipleQuestions() = runBlocking {
-        fun enqueue(question: String): String {
+        suspend fun enqueue(question: String): String {
             val args = buildJsonObject {
                 put("question", question)
                 putJsonArray("options") { add(JsonPrimitive("OK")) }
