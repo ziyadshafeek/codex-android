@@ -62,16 +62,18 @@ class WebFetchTool internal constructor(
      * (OkHttp uses the parsed address directly); those are refused by
      * [validateSafeTarget] before any call is made.
      */
-    internal val pinnedDns: Dns = Dns { host ->
-        val resolved = dnsResolver(host)
-        for (addr in resolved) {
-            if (isBlockedInetAddress(addr)) {
-                throw UnknownHostException(
-                    "SSRF protection: host '$host' resolved to disallowed address ${addr.hostAddress}",
-                )
+    internal val pinnedDns: Dns = object : Dns {
+        override fun lookup(hostname: String): List<InetAddress> {
+            val resolved = dnsResolver(hostname)
+            for (addr in resolved) {
+                if (isBlockedInetAddress(addr)) {
+                    throw UnknownHostException(
+                        "SSRF protection: host '$hostname' resolved to disallowed address ${addr.hostAddress}",
+                    )
+                }
             }
+            return resolved
         }
-        resolved
     }
 
     internal val client: OkHttpClient = httpClient.newBuilder()
