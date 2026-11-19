@@ -57,6 +57,16 @@ data class McpServerEntity(
     // Auth bearer token is stored in KeyStore under "mcp_token_<id>", NOT in SQLite.
 )
 
+/** One row of the v3 `knowledge_base` table (H4). `tags` is a plain list; it is stored comma-joined. */
+data class KnowledgeEntryRow(
+    val id: String,
+    val title: String,
+    val body: String,
+    val tags: List<String> = emptyList(),
+    val createdAt: Long,
+    val updatedAt: Long,
+)
+
 /**
  * The single shared SQLite database for Codex on-device memory.
  *
@@ -75,6 +85,17 @@ data class McpServerEntity(
  *   merged in from the drop-in backend spec — there is exactly one database
  *   file (`codex.db`) and one helper, never a second database.
  *
+ * v2 -> v3 migration notes (see [onUpgrade]):
+ * - Adds the `knowledge_base` table (H4 knowledge base) and
+ *   [replaceMessages] (H4 context rewind). Both are additive only:
+ *   no existing table, column, or row is touched.
+ * - `knowledge_base` columns: `id TEXT PRIMARY KEY`, `title`,
+ *   `body`, `tags` (comma-joined, '' when empty), `created_at`,
+ *   `updated_at` (epoch millis). Search is a LIKE fallback over
+ *   title/body/tags — there is deliberately NO FTS5 table: the
+ *   knowledge base lives in this single database (`codex.db`), never
+ *   in a second database file.
+ *
  * v1 -> v2 migration notes (see [onUpgrade]):
  * - The v1 `messages` DDL is preserved except for the three added columns.
  *   `thread_id` is deliberately NULLABLE (the drop-in had it NOT NULL):
@@ -90,7 +111,7 @@ class CodexDatabase(context: Context) :
 
     companion object {
         const val DATABASE_NAME = "codex.db"
-        const val DATABASE_VERSION = 2
+        const val DATABASE_VERSION = 3
 
         const val TABLE_MESSAGES = "messages"
         const val TABLE_FACTS = "facts"
@@ -100,6 +121,7 @@ class CodexDatabase(context: Context) :
         const val TABLE_AUTOMATIONS = "automations"
         const val TABLE_MCP_SERVERS = "mcp_servers"
         const val TABLE_AUDIT_LOG = "audit_log"
+        const val TABLE_KNOWLEDGE_BASE = "knowledge_base"
 
         const val DEFAULT_PHONE_WORKSPACE_ID = "ws_phone"
 
@@ -221,6 +243,19 @@ class CodexDatabase(context: Context) :
             """.trimIndent()
         )
 
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS $TABLE_KNOWLEDGE_BASE (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                body TEXT NOT NULL,
+                tags TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            """.trimIndent()
+        )
+
         // Seed built-in "This Phone" workspace so the app works immediately.
         seedPhoneWorkspace(db)
     }
@@ -302,6 +337,22 @@ class CodexDatabase(context: Context) :
             addColumnIfMissing(db, TABLE_MESSAGES, "metadata_json TEXT NOT NULL DEFAULT '{}'")
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id, id)")
             seedPhoneWorkspace(db)
+        }
+        if (oldVersion < 3) {
+            // v2 -> v3: add the knowledge_base table only (idempotent).
+            // No existing table is altered and no row is touched.
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS $TABLE_KNOWLEDGE_BASE (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    tags TEXT NOT NULL DEFAULT '',
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
         }
     }
 
@@ -489,6 +540,141 @@ class CodexDatabase(context: Context) :
             }
             result
         }
+
+    /**
+     * Replaces ALL messages of [threadId] with [messages], in order, in a
+     * single transaction (H4 context rewind). Message ids are NOT preserved:
+     * each row is re-inserted and gets a fresh autoincrement id, so callers
+     * must re-read with [getMessages] afterwards (rewind does exactly that
+     * via the returned marker). An empty list deletes every message.
+     */
+    suspend fun replaceMessages(threadId: String, messages: List<TimelineMessage>) =
+        withContext(Dispatchers.IO) {
+            val db = writableDatabase
+            db.beginTransaction()
+            try {
+                db.delete("messages", "thread_id = ?", arrayOf(threadId))
+                for (msg in messages) {
+                    val cv = ContentValues().apply {
+                        put("thread_id", threadId)
+                        put("role", msg.role)
+                        put("kind", msg.kind)
+                        put("content", msg.content)
+                        put("metadata_json", msg.metadataJson)
+                        put("created_at", msg.createdAt)
+                    }
+                    db.insert("messages", null, cv)
+                }
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
+            }
+            updateThreadState(threadId)
+        }
+
+    // --- Knowledge base (v3, H4) ---
+
+    suspend fun insertKnowledgeEntry(
+        title: String,
+        body: String,
+        tags: List<String> = emptyList(),
+        id: String = "kb_${UUID.randomUUID().toString().take(12)}",
+    ): String = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        val cv = ContentValues().apply {
+            put("id", id)
+            put("title", title)
+            put("body", body)
+            put("tags", tags.joinToString(","))
+            put("created_at", now)
+            put("updated_at", now)
+        }
+        writableDatabase.insertWithOnConflict(
+            TABLE_KNOWLEDGE_BASE, null, cv, SQLiteDatabase.CONFLICT_REPLACE
+        )
+        id
+    }
+
+    suspend fun getKnowledgeEntry(id: String): KnowledgeEntryRow? = withContext(Dispatchers.IO) {
+        readableDatabase.rawQuery(
+            "SELECT id, title, body, tags, created_at, updated_at FROM $TABLE_KNOWLEDGE_BASE WHERE id = ?",
+            arrayOf(id)
+        ).use { c ->
+            if (!c.moveToFirst()) return@withContext null
+            rowToKnowledgeEntry(c)
+        }
+    }
+
+    /**
+     * LIKE search over title/body/tags (case-insensitive for ASCII in
+     * SQLite LIKE). The query is escaped so `%`/`_`/`\` in user input
+     * match literally. Blank query returns an empty list (never "all").
+     * This is the ONLY search: there is no FTS5 table by design.
+     */
+    suspend fun searchKnowledgeEntries(query: String): List<KnowledgeEntryRow> =
+        withContext(Dispatchers.IO) {
+            val trimmed = query.trim()
+            if (trimmed.isEmpty()) return@withContext emptyList()
+            val like = "%${escapeLike(trimmed)}%"
+            val result = mutableListOf<KnowledgeEntryRow>()
+            readableDatabase.rawQuery(
+                """
+                SELECT id, title, body, tags, created_at, updated_at
+                FROM $TABLE_KNOWLEDGE_BASE
+                WHERE title LIKE ? ESCAPE '\' OR body LIKE ? ESCAPE '\' OR tags LIKE ? ESCAPE '\'
+                ORDER BY updated_at DESC
+                """.trimIndent(),
+                arrayOf(like, like, like)
+            ).use { c ->
+                while (c.moveToNext()) result += rowToKnowledgeEntry(c)
+            }
+            result
+        }
+
+    suspend fun listKnowledgeEntries(): List<KnowledgeEntryRow> = withContext(Dispatchers.IO) {
+        val result = mutableListOf<KnowledgeEntryRow>()
+        readableDatabase.rawQuery(
+            "SELECT id, title, body, tags, created_at, updated_at FROM $TABLE_KNOWLEDGE_BASE ORDER BY updated_at DESC",
+            null
+        ).use { c ->
+            while (c.moveToNext()) result += rowToKnowledgeEntry(c)
+        }
+        result
+    }
+
+    suspend fun updateKnowledgeEntry(
+        id: String,
+        title: String,
+        body: String,
+        tags: List<String> = emptyList(),
+    ): Boolean = withContext(Dispatchers.IO) {
+        val cv = ContentValues().apply {
+            put("title", title)
+            put("body", body)
+            put("tags", tags.joinToString(","))
+            put("updated_at", System.currentTimeMillis())
+        }
+        writableDatabase.update(TABLE_KNOWLEDGE_BASE, cv, "id = ?", arrayOf(id)) > 0
+    }
+
+    suspend fun deleteKnowledgeEntry(id: String): Boolean = withContext(Dispatchers.IO) {
+        writableDatabase.delete(TABLE_KNOWLEDGE_BASE, "id = ?", arrayOf(id)) > 0
+    }
+
+    private fun rowToKnowledgeEntry(c: android.database.Cursor): KnowledgeEntryRow {
+        val tagsRaw = c.getString(3).orEmpty()
+        return KnowledgeEntryRow(
+            id = c.getString(0),
+            title = c.getString(1),
+            body = c.getString(2),
+            tags = if (tagsRaw.isBlank()) emptyList() else tagsRaw.split(",").map { it.trim() }.filter { it.isNotEmpty() },
+            createdAt = c.getLong(4),
+            updatedAt = c.getLong(5),
+        )
+    }
+
+    private fun escapeLike(value: String): String =
+        value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
     // --- Automations ---
 
