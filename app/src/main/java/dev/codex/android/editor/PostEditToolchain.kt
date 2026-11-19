@@ -191,7 +191,13 @@ object PostEditToolchain {
             val line = rawLine.trim()
             if (line.isEmpty()) continue
 
-            tscRegex.matchEntire(line)?.let { m ->
+            // `continue` directly in the loop body: `continue` inside an
+            // inline `let` lambda needs the experimental "break continue in
+            // inline lambdas" feature, which this project's Kotlin 1.9.25
+            // setup rejects (CI run 44629934149).
+            val tscMatch = tscRegex.matchEntire(line)
+            if (tscMatch != null) {
+                val m = tscMatch
                 items += DiagnosticItem(
                     filePath = m.groupValues[1],
                     line = m.groupValues[2].toIntOrNull() ?: 1,
@@ -203,7 +209,9 @@ object PostEditToolchain {
                 continue
             }
 
-            pyrightTextRegex.matchEntire(line)?.let { m ->
+            val pyrightMatch = pyrightTextRegex.matchEntire(line)
+            if (pyrightMatch != null) {
+                val m = pyrightMatch
                 items += DiagnosticItem(
                     filePath = m.groupValues[1],
                     line = m.groupValues[2].toIntOrNull() ?: 1,
