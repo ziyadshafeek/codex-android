@@ -89,7 +89,7 @@ data class UiNode(
     fun toCompactText(maxLines: Int = 200, maxChars: Int = 6000): String {
         val out = StringBuilder()
         var lines = 0
-        fun shortClass(): String = className.substringAfterLast('.')
+        fun shortClass(name: String): String = name.substringAfterLast('.')
         fun quote(value: String): String {
             val clean = value.replace('\n', ' ').trim().take(MAX_LABEL_CHARS)
             return "\"$clean\""
@@ -100,7 +100,7 @@ data class UiNode(
             if (out.isNotEmpty()) out.append('\n')
             repeat(depth) { out.append("  ") }
             out.append('[').append(node.id).append("] ")
-            val cls = shortClass()
+            val cls = shortClass(node.className)
             if (cls.isNotEmpty()) out.append(cls).append(' ')
             if (node.text.isNotBlank()) out.append(quote(node.text)).append(' ')
             if (node.contentDescription.isNotBlank()) {
