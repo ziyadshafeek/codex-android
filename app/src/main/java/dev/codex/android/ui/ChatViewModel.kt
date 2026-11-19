@@ -8,6 +8,7 @@ import dev.codex.android.agent.AgentLoop
 import dev.codex.android.agent.AgentRuntime
 import dev.codex.android.agent.PendingApproval
 import dev.codex.android.agent.PlanStore
+import dev.codex.android.agent.channelEventCollector
 import dev.codex.android.api.OkHttpOpenAiClient
 import dev.codex.android.data.CodexDatabase
 import dev.codex.android.data.KeyStore
@@ -26,25 +27,55 @@ import dev.codex.android.tools.ToolRegistry
 import dev.codex.android.tools.ToolResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
-data class ChatUiMessage(val role: String, val text: String, val isError: Boolean = false)
+data class ChatUiMessage(
+    val role: String,
+    val text: String,
+    val isError: Boolean = false,
+    /** Stable id so a restore can dedupe a message already on screen. */
+    val id: String = UUID.randomUUID().toString(),
+)
 // roles: "user", "assistant", "system"
 
 /** One past user goal for the History screen. */
 data class HistoryEntry(val text: String, val createdAtMillis: Long)
+
+/**
+ * Merges a just-restored history batch in front of the messages already
+ * on screen (BUG 1). Restored (older) first, in-session (newer) after.
+ *
+ * A message appended while restore was suspended can also be present in
+ * the restored batch (it was persisted before restore read the DB): the
+ * restored duplicate is dropped and the in-session copy keeps its place.
+ * Dedupe is by stable [ChatUiMessage.id] first, then by (role, text)
+ * across the restore boundary — the restored copy is a fresh object, so
+ * its id differs from the in-session one. Duplicates WITHIN either side
+ * are kept: genuine repeats in history are real messages.
+ */
+internal fun mergeRestored(
+    restored: List<ChatUiMessage>,
+    current: List<ChatUiMessage>,
+): List<ChatUiMessage> {
+    val seenIds = current.map { it.id }.toSet()
+    val seenContent = current.map { it.role to it.text }.toSet()
+    val kept = restored.filterNot { it.id in seenIds || (it.role to it.text) in seenContent }
+    return (kept + current).distinctBy { it.id }
+}
 
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -133,7 +164,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         }
                         ChatUiMessage(role, stored.content)
                     }
-                    _messages.update { it + restored }
+                    _messages.update { mergeRestored(restored, it) }
                 }
             } catch (e: Exception) {
                 // Never crash on a corrupt memory/skills DB.
@@ -161,8 +192,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      * was only seeded in init, so a goal sent this session never
      * appeared until the next launch. Newest first, de-duplicated by
      * text (a repeat moves to the top, as the init seeding does), capped
-     * at 50 — mirroring the init seeding and the memory save in
-     * sendGoal, which also records no-key goals.
+     * at 50 — mirroring the init seeding. Called ONLY after a run has
+     * actually started (see sendGoal): a tap that starts nothing records
+     * nothing.
      */
     private fun recordHistory(goal: String) {
         val entry = HistoryEntry(goal, System.currentTimeMillis())
@@ -202,26 +234,26 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         AgentRuntime.steer(threadId, text)
     }
 
+    /**
+     * Synchronous Main-thread guard (BUG 2): set before any launch, reset
+     * only after startTurn resolves. Two rapid taps on Main both run
+     * sendGoal synchronously — the second sees the guard and returns
+     * before any side effect. [AgentRuntime.startTurn] remains the atomic
+     * authority (a run started elsewhere still returns false there), so
+     * the racy `_isRunning.value` pre-check is gone.
+     */
+    private var startingTurn = false
+
     fun sendGoal(goal: String) {
         if (goal.isBlank()) return
-        if (_isRunning.value) return
-        // History for this session (item 3): record the goal now, before
-        // either the no-key or the running branch — the memory save
-        // below does the same. A refused double-tap re-records the same
-        // text, which recordHistory de-duplicates, so no duplicate row.
-        recordHistory(goal)
-        // Fire-and-forget: a memory failure must never affect the chat.
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                memoryStore.saveMessage("user", goal)
-            } catch (e: Exception) {
-                // Never crash on a memory failure.
-            }
-        }
+        if (startingTurn) return
+        startingTurn = true
         if (!_hasKey.value) {
-            // The no-key message (and the user's own message) are
-            // appended synchronously, exactly as before: no network, no
-            // client is built on this path.
+            // No run starts on this path, so the guard is released and
+            // nothing is recorded: a tap that starts nothing must not
+            // pollute History or memory (BUG 2 side-effect leak). The
+            // user's message and the no-key error are still shown.
+            startingTurn = false
             append(ChatUiMessage("user", goal))
             append(
                 ChatUiMessage(
@@ -235,28 +267,44 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // Capture credentials now: the runner executes in AgentRuntime's
         // scope, after this function returns.
         val baseUrl = keyStore.getBaseUrl()
-        val apiKey = keyStore.getApiKey() ?: return
+        val apiKey = keyStore.getApiKey() ?: run {
+            startingTurn = false
+            return
+        }
         val model = keyStore.getModel()
         val mode = ExecutionMode.AUTO
         viewModelScope.launch {
-            val threadId = ensureThread(goal)
-            // startTurn returns false when a run is already active for
-            // this thread: one run per thread at a time. The Send button
-            // is disabled while running and sendGoal pre-checks
-            // _isRunning, so this is only reachable on a double-tap
-            // racing the running-state propagation. The user's message is
-            // appended only once the run has actually started, so a
-            // refused second send leaves no phantom unanswered message.
-            val started = AgentRuntime.startTurn(
-                getApplication(),
-                threadId,
-                goal,
-                mode,
-            ) {
-                runAgentTurn(this, threadId, goal, baseUrl, apiKey, model, mode)
-            }
-            if (started) {
-                append(ChatUiMessage("user", goal))
+            try {
+                val threadId = ensureThread(goal)
+                // startTurn returns false when a run is already active for
+                // this thread: one run per thread at a time. The user's
+                // message, the History entry and the memory save happen
+                // ONLY once the run has actually started, so a refused
+                // second send leaves no phantom unanswered message and no
+                // History or memory pollution.
+                val started = AgentRuntime.startTurn(
+                    getApplication(),
+                    threadId,
+                    goal,
+                    mode,
+                ) {
+                    runAgentTurn(this, threadId, goal, baseUrl, apiKey, model, mode)
+                }
+                if (started) {
+                    append(ChatUiMessage("user", goal))
+                    recordHistory(goal)
+                    // Fire-and-forget: a memory failure must never affect
+                    // the chat.
+                    launch(Dispatchers.IO) {
+                        try {
+                            memoryStore.saveMessage("user", goal)
+                        } catch (e: Exception) {
+                            // Never crash on a memory failure.
+                        }
+                    }
+                }
+            } finally {
+                startingTurn = false
             }
         }
     }
@@ -310,8 +358,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      *   answer the loop's gate with the result.
      * - Every event     → drainSteeringMessages() (step boundary).
      *
-     * The collector is attached BEFORE loop.run() starts emitting, so no
-     * early event is lost. The step budget is enforced by nextStepOrThrow:
+     * The collector is attached BEFORE loop.run() starts emitting, and
+     * events travel through a Channel (BUG 3), which queues anything
+     * emitted before the collector subscribes — so no early event is lost
+     * either way. The step budget is enforced by nextStepOrThrow:
      * its IllegalStateException fails the collector child, coroutineScope
      * cancels the loop and rethrows it, and it is recorded in the DB by
      * AgentRuntime as "Error: Stopped: reached max step budget (N)".
@@ -331,7 +381,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         mode: ExecutionMode,
     ): String {
         val db = CodexDatabase.getInstance(getApplication())
-        val events = MutableSharedFlow<AgentEvent>(extraBufferCapacity = 64)
+        // BUG 3: a Channel, not a SharedFlow. MutableSharedFlow with
+        // replay=0 buffers NOTHING while nobody collects — the first event
+        // emitted before the collector subscribes is dropped immediately,
+        // however large extraBufferCapacity is. A Channel queues every
+        // pre-collection event in FIFO order and delivers each exactly
+        // once. UNLIMITED (not BUFFERED): the collector does suspending
+        // DB/approval work, and backpressure must never stall the loop
+        // mid-approval; a run is bounded by the step budget, so the queue
+        // stays small.
+        val events = Channel<AgentEvent>(Channel.UNLIMITED)
+        val eventSink = channelEventCollector(events)
         val finishedEmitted = AtomicBoolean(false)
         // Approval requests the policy already refused: the policy gate
         // answered them without prompting, so the collector must not open
@@ -359,9 +419,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val answer: String = try {
             coroutineScope {
                 // The collector is attached BEFORE loop.run() starts
-                // emitting, so no early event is lost.
+                // emitting, and the Channel queues anything emitted before
+                // it subscribes — so no early event is lost either way.
                 val collector = launch {
-                    events.collect { event ->
+                    events.receiveAsFlow().collect { event ->
                         // Drain mid-turn steering at every step boundary.
                         // AgentLoop has no injection point for mid-turn
                         // messages, so steering cannot steer the current
@@ -475,7 +536,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 try {
-                    val loopAnswer = loop.run(goal, events)
+                    val loopAnswer = loop.run(goal, eventSink)
                     // Give the collector a brief chance to deliver a Finished
                     // event that was emitted just before run() returned.
                     for (i in 0 until 20) {
@@ -488,6 +549,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     loopAnswer
                 } finally {
                     collector.cancel()
+                    events.close()
                 }
             }
         } catch (e: IllegalStateException) {

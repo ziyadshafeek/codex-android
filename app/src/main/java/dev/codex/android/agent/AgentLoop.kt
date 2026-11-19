@@ -12,8 +12,20 @@ import dev.codex.android.skills.SkillRunner
 import dev.codex.android.tools.ToolRegistry
 import dev.codex.android.tools.parseToolCall
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.channels.SendChannel
+import kotlinx.coroutines.flow.FlowCollector
 import java.util.UUID
+
+/**
+ * Adapts a [Channel] into a [FlowCollector] for [AgentLoop.run] (BUG 3).
+ * A `MutableSharedFlow` with `replay = 0` drops every event emitted
+ * before the first collector subscribes — `extraBufferCapacity` buffers
+ * nothing while `subscriptionCount == 0` — so the loop must emit into a
+ * Channel, which queues pre-collection events in FIFO order and delivers
+ * each exactly once. This bridge is the only place that conversion lives.
+ */
+internal fun channelEventCollector(channel: SendChannel<AgentEvent>): FlowCollector<AgentEvent> =
+    FlowCollector { event -> channel.send(event) }
 
 /**
  * The ReAct agent loop: observe (model) → think → act (tools) → observe.
@@ -63,7 +75,7 @@ class AgentLoop(
      * Runs [goal] to completion. Emits progress events to [events] and
      * returns the final answer text. Never returns null.
      */
-    suspend fun run(goal: String, events: MutableSharedFlow<AgentEvent>): String {
+    suspend fun run(goal: String, events: FlowCollector<AgentEvent>): String {
         val plan = Plan(
             id = UUID.randomUUID().toString(),
             goal = goal,
@@ -210,7 +222,7 @@ class AgentLoop(
     private suspend fun runToolWithGate(
         call: ToolCall,
         parsed: dev.codex.android.tools.ParsedToolCall,
-        events: MutableSharedFlow<AgentEvent>,
+        events: FlowCollector<AgentEvent>,
     ): String? {
         val tool = parsed.tool
         if (SensitivityPolicy.requiresApproval(tool)) {
@@ -258,7 +270,7 @@ class AgentLoop(
     private suspend fun finishWithError(
         error: CodexError,
         plan: Plan,
-        events: MutableSharedFlow<AgentEvent>,
+        events: FlowCollector<AgentEvent>,
     ): String {
         val failed = plan
             .withStepUpdated("act", PlanStepStatus.FAILED, error.message)
