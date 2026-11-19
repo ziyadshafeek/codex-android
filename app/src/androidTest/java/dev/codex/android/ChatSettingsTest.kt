@@ -1,6 +1,7 @@
 package dev.codex.android
 
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -11,6 +12,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -21,6 +23,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.FixMethodOrder
 import org.junit.Rule
 import org.junit.Test
@@ -76,7 +79,11 @@ class ChatSettingsTest {
      * chat. Copied from SmokeTest.
      */
     private fun skipOnboardingIfShown() {
-        composeTestRule.waitUntil(timeoutMillis = 15_000) {
+        // 30 s for the FIRST wait: this is the app-launch wait, and a
+        // cold start on the slow no-KVM emulator can take well over
+        // 15 s. Only the timeout is raised — the wait still returns as
+        // soon as either screen appears.
+        composeTestRule.waitUntil(timeoutMillis = 30_000) {
             composeTestRule.onAllNodesWithTag("onboarding_skip")
                 .fetchSemanticsNodes().isNotEmpty() ||
                 composeTestRule.onAllNodesWithTag("empty_state_title")
@@ -124,8 +131,12 @@ class ChatSettingsTest {
      * next launch, which would hide the empty state — and reset the
      * KeyStore to its defaults (blank base URL / default model / no key).
      * The send in sendGoal saves the user message from a fire-and-forget
-     * IO coroutine, so clear twice with a short delay between them: the
-     * second clear catches a save that lands after the first.
+     * IO coroutine, so clear in a loop and read the store back after
+     * each clear: the loop only exits once recentMessages() actually
+     * reads empty, so a save that lands late cannot slip through.
+     * If the store never reads empty, fail loudly here: a leftover
+     * message would otherwise break the NEXT test (or test class) with
+     * a confusing empty-state failure far from the cause.
      */
     @After
     fun tearDown() {
@@ -138,9 +149,20 @@ class ChatSettingsTest {
             // Blank model falls back to KeyStore.DEFAULT_MODEL on read.
             keyStore.setModel("")
             val memoryStore = MemoryStore(context)
-            memoryStore.clearMessages()
-            delay(300)
-            memoryStore.clearMessages()
+            var emptied = false
+            for (attempt in 1..5) {
+                memoryStore.clearMessages()
+                delay(300)
+                if (memoryStore.recentMessages(20).isEmpty()) {
+                    emptied = true
+                    break
+                }
+            }
+            assertTrue(
+                "tearDown could not clear stored chat messages after 5 " +
+                    "attempts — the next test would see a restored message",
+                emptied,
+            )
         }
     }
 
@@ -245,15 +267,14 @@ class ChatSettingsTest {
         // value can never be shown as text).
         composeTestRule.onAllNodesWithText(FAKE_KEY).assertCountEquals(0)
         // Stronger check on the field itself: its editable text is empty.
-        // (SemanticsConfiguration has no getOrNull in this Compose version,
-        // so check contains() first, then read with the operator get.)
+        // SemanticsConfiguration.getOrNull is an extension function in
+        // this Compose version (ui 1.7.2, BOM 2024.09.00), verified
+        // against the published sources — it returns null when the
+        // property is absent instead of throwing.
         val semanticsNode = composeTestRule.onNodeWithTag("settings_api_key")
             .fetchSemanticsNode()
-        val editableText = if (SemanticsProperties.EditableText in semanticsNode.config) {
-            semanticsNode.config[SemanticsProperties.EditableText].text
-        } else {
-            null
-        }
+        val editableText = semanticsNode.config
+            .getOrNull(SemanticsProperties.EditableText)?.text
         assertEquals("", editableText)
 
         // Leave the device clean: remove the fake key again.
@@ -275,6 +296,11 @@ class ChatSettingsTest {
         composeTestRule.onNodeWithTag("settings_api_key").assertIsDisplayed()
         composeTestRule.onNodeWithTag("settings_save").assertIsDisplayed()
         composeTestRule.onNodeWithTag("settings_clear_key").assertIsDisplayed()
+        // "Keep Codex alive" sits below the fold in SettingsScreen's
+        // vertically-scrolling Column: scroll to it first, or
+        // assertIsDisplayed fails on a shorter emulator viewport even
+        // though the row is genuinely there.
+        composeTestRule.onNodeWithText("Keep Codex alive").performScrollTo()
         composeTestRule.onNodeWithText("Keep Codex alive").assertIsDisplayed()
     }
 
@@ -299,6 +325,11 @@ class ChatSettingsTest {
             composeTestRule.onAllNodesWithTag("settings_saved")
                 .fetchSemanticsNodes().isNotEmpty()
         }
+        // "Saved" sits below the Clear key button in the scrolling
+        // Column: scroll to it first, or assertIsDisplayed can fail on
+        // a shorter emulator viewport (the wait above only proves the
+        // node exists, not that it is on screen).
+        composeTestRule.onNodeWithTag("settings_saved").performScrollTo()
         composeTestRule.onNodeWithTag("settings_saved").assertIsDisplayed()
         composeTestRule.onNodeWithText("Saved").assertIsDisplayed()
 
@@ -318,15 +349,15 @@ class ChatSettingsTest {
     /**
      * Asserts a TextField's current value by reading its EditableText
      * semantics property (the actual input), ignoring the label text
-     * that assertTextEquals would also see.
+     * that assertTextEquals would also see. getOrNull is an extension
+     * function on SemanticsConfiguration in this Compose version
+     * (ui 1.7.2, BOM 2024.09.00), verified against the published
+     * sources — it returns null when the property is absent.
      */
     private fun assertEditableText(tag: String, expected: String) {
         val node = composeTestRule.onNodeWithTag(tag).fetchSemanticsNode()
-        val actual = if (SemanticsProperties.EditableText in node.config) {
-            node.config[SemanticsProperties.EditableText].text
-        } else {
-            null
-        }
+        val actual = node.config
+            .getOrNull(SemanticsProperties.EditableText)?.text
         assertEquals(expected, actual)
     }
 }

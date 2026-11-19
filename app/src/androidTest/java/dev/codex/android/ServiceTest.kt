@@ -56,8 +56,13 @@ class ServiceTest {
             // onStartCommand degrades gracefully (stopSelf, no crash) if
             // foreground promotion is refused, so instance-not-null is
             // the only assertion — not "stays in foreground".
+            // 10 s, not 5: service creation on the slow no-KVM emulator
+            // (process start + onCreate + notification channel) can take
+            // several seconds, and a short poll would fail a service that
+            // was still starting. The poll still returns the moment the
+            // instance appears.
             var running: CodexAgentService? = null
-            val deadline = System.currentTimeMillis() + 5_000L
+            val deadline = System.currentTimeMillis() + 10_000L
             while (System.currentTimeMillis() < deadline) {
                 running = CodexAgentService.instance
                 if (running != null) break

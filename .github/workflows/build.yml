@@ -61,6 +61,17 @@ jobs:
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-34" "build-tools;34.0.0"
 
+      # Required by the emulator-runner README ("Remember to enable KVM
+      # in your workflow before running this action"). On standard
+      # GitHub-hosted runners there is no nested virtualization, so this
+      # is a harmless no-op today and becomes required if the job moves
+      # to a larger runner with hardware acceleration.
+      - name: Enable KVM group perms
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
       - name: Run instrumented smoke tests on emulator (API 34)
         uses: reactivecircus/android-emulator-runner@v2
         with:

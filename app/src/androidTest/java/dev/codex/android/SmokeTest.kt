@@ -38,12 +38,22 @@ class SmokeTest {
     /**
      * If onboarding is showing, tap Skip and wait for the chat; if it was
      * already skipped by an earlier test in this run, just wait for the chat.
+     * The chat input is a third wait condition: if an earlier test class
+     * left a stored message behind (ChatViewModel restores it on launch),
+     * the empty state never appears, and without the input fallback this
+     * helper would time out instead of reaching the chat.
      */
     private fun skipOnboardingIfShown() {
-        composeTestRule.waitUntil(timeoutMillis = 15_000) {
+        // 30 s for the FIRST wait: this is the app-launch wait, and a
+        // cold start on the slow no-KVM emulator can take well over
+        // 15 s. Only the timeout is raised — the wait still returns as
+        // soon as any of the three screens appears.
+        composeTestRule.waitUntil(timeoutMillis = 30_000) {
             composeTestRule.onAllNodesWithTag("onboarding_skip")
                 .fetchSemanticsNodes().isNotEmpty() ||
                 composeTestRule.onAllNodesWithTag("empty_state_title")
+                    .fetchSemanticsNodes().isNotEmpty() ||
+                composeTestRule.onAllNodesWithTag("chat_input")
                     .fetchSemanticsNodes().isNotEmpty()
         }
         if (composeTestRule.onAllNodesWithTag("onboarding_skip")
@@ -63,27 +73,40 @@ class SmokeTest {
         // class in this instrumentation run may already have completed
         // onboarding (SharedPreferences persists across classes), so
         // tolerate onboarding already being done — assert it when it is
-        // showing, skip it, and always end on the chat empty state.
-        composeTestRule.waitUntil(timeoutMillis = 15_000) {
+        // showing, skip it, and always end on the chat.
+        composeTestRule.waitUntil(timeoutMillis = 30_000) {
             composeTestRule.onAllNodesWithTag("onboarding_skip")
                 .fetchSemanticsNodes().isNotEmpty() ||
                 composeTestRule.onAllNodesWithTag("empty_state_title")
+                    .fetchSemanticsNodes().isNotEmpty() ||
+                composeTestRule.onAllNodesWithTag("chat_input")
                     .fetchSemanticsNodes().isNotEmpty()
         }
-        if (composeTestRule.onAllNodesWithText("Welcome to Codex")
-                .fetchSemanticsNodes().isNotEmpty()
-        ) {
+        val onboardingWasShown = composeTestRule.onAllNodesWithText("Welcome to Codex")
+            .fetchSemanticsNodes().isNotEmpty()
+        if (onboardingWasShown) {
             composeTestRule.onNodeWithText("Welcome to Codex").assertIsDisplayed()
             composeTestRule.onNodeWithTag("onboarding_step").assertIsDisplayed()
             composeTestRule.onNodeWithTag("onboarding_skip").performClick()
         }
 
-        // Chat empty state: title, input field and Send button.
+        // Chat reached: the input field and Send button are present
+        // whether or not the chat is empty. The empty-state title is
+        // asserted only when onboarding was shown (and skipped) in this
+        // test: on that path no message can exist yet, so the empty
+        // state must appear. When onboarding was already done by an
+        // earlier class, a message restored from that class would hide
+        // the empty state, and asserting it here would fail a test
+        // whose job is only to prove the app reaches the chat.
         composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithTag("empty_state_title")
-                .fetchSemanticsNodes().isNotEmpty()
+                .fetchSemanticsNodes().isNotEmpty() ||
+                composeTestRule.onAllNodesWithTag("chat_input")
+                    .fetchSemanticsNodes().isNotEmpty()
         }
-        composeTestRule.onNodeWithTag("empty_state_title").assertIsDisplayed()
+        if (onboardingWasShown) {
+            composeTestRule.onNodeWithTag("empty_state_title").assertIsDisplayed()
+        }
         composeTestRule.onNodeWithTag("chat_input").assertIsDisplayed()
         composeTestRule.onNodeWithTag("chat_send").assertIsDisplayed()
     }
