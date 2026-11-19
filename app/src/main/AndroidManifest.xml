@@ -2,11 +2,20 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- v1 permissions only: network + foreground service + notifications.
-         No dangerous permission is requested in this skeleton. -->
+    <!-- Permissions: network + foreground service + notifications,
+         plus Phase 4 survival (boot resurrection, data-sync foreground
+         service type, exact-alarm scheduling). No dangerous permission is
+         requested in this skeleton. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Phase 4: lets the "Request exemption" button open the one-tap
+         battery-optimisation dialog; without it Android rejects the intent
+         and the button falls back to the manual list. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
 
     <application
         android:allowBackup="true"
@@ -25,17 +34,14 @@
         </activity>
 
         <!-- Phase 4 (virtual-space survival): foreground service.
-             NOT enabled in v1 — uncomment when the agent service lands. -->
-        <!--
+             Enabled in v0.4.0. Not exported. -->
         <service
             android:name=".service.CodexAgentService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
-        -->
 
         <!-- Phase 4: boot receiver for resurrection after reboot.
-             NOT enabled in v1 — uncomment when the survival layer lands. -->
-        <!--
+             Enabled in v0.4.0. Exported: the system sends BOOT_COMPLETED. -->
         <receiver
             android:name=".service.BootReceiver"
             android:exported="true">
@@ -43,7 +49,12 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
-        -->
+
+        <!-- Phase 4: alarm receiver for scheduled tasks. Not exported:
+             only the app's own AlarmManager sends to it (explicit intent). -->
+        <receiver
+            android:name=".scheduler.TaskReceiver"
+            android:exported="false" />
 
         <!-- Phase 2 (Android control): AccessibilityService.
              Enabled in v0.3.0. Not exported.

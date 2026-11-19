@@ -85,6 +85,7 @@ class ToolRegistry {
                 register(ScrollTool)
                 register(GoBackTool)
                 register(PressHomeTool)
+                register(ScheduleTaskTool(context))
             }
     }
 }
