@@ -29,3 +29,11 @@
 -keep class dev.codex.android.scheduler.TaskReceiver { *; }
 -keep class dev.codex.android.service.BootReceiver { *; }
 -keep class dev.codex.android.service.AutomationWorker { *; }
+
+# Release R8: Tink (via androidx.security:security-crypto) references
+# com.google.errorprone.annotations.* (CanIgnoreReturnValue,
+# CheckReturnValue, Immutable, RestrictedApi), which are compile-time-only
+# annotations absent from the runtime classpath. R8 fails
+# minifyReleaseWithR8 on the missing classes (CI runs 44639596138,
+# 44639680528) — silence those warnings; nothing at runtime needs them.
+-dontwarn com.google.errorprone.annotations.**
