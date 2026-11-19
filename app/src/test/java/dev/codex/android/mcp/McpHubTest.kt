@@ -95,6 +95,9 @@ class McpHubTest {
             servers.removeAll { it.id == server.id }
             servers += server
         }
+
+        override suspend fun deleteServer(serverId: String): Boolean =
+            servers.removeAll { it.id == serverId }
     }
 
     private val initializeOk = CannedResponse(
@@ -165,12 +168,10 @@ class McpHubTest {
         assertEquals(entity.id, listed[0].id)
 
         assertTrue(f.hub.removeMcpServer(entity.id))
-        // Real store has no delete: removal soft-disables. The server
-        // is gone from the enabled list (and from connectAll) while
-        // the disabled row remains in the full list.
+        // Hard delete: the server is gone from the full list as well
+        // as the enabled list, and a second removal is a no-op.
         assertTrue(f.hub.listMcpServers(onlyEnabled = true).isEmpty())
-        assertEquals(1, f.hub.listMcpServers().size)
-        assertFalse(f.hub.listMcpServers().single().enabled)
+        assertTrue(f.hub.listMcpServers().isEmpty())
         assertFalse(f.hub.removeMcpServer(entity.id))
     }
 

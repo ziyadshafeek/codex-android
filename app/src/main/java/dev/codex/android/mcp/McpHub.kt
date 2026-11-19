@@ -159,11 +159,9 @@ sealed interface HubServer {
  *   (non-existent) `httpClient`.
  * - Stdio servers are [StdioServerConfig]s in [StdioConfigStore],
  *   never [McpServerEntity]s; see that class's KDoc.
- * - Removal: the real manager/store has no delete, so a remote
- *   removal disconnects and soft-disables (`enabled = false`); stdio
- *   removals are hard deletes from the hub-owned store. A future
- *   `deleteMcpServer` on `CodexDatabase`/`McpServerStore` would make
- *   remote removal a hard delete.
+ * - Removal: remote removal hard-deletes the row via
+ *   [McpManager.deleteServer] (see [CodexDatabase.deleteMcpServer]);
+ *   stdio removals are hard deletes from the hub-owned store.
  * - Every MCP tool result — remote and stdio, direct calls and
  *   [Tool] adapters — passes through [SecretScrubber] before entering
  *   the agent's context. Note the real manager's own `McpTool` does
@@ -291,12 +289,9 @@ class McpHub(
 
     /**
      * Removes a registered server by id. Stdio servers are hard-deleted
-     * from the hub-owned store. Remote servers are disconnected and
-     * soft-disabled (`enabled = false`): the real [McpServerStore] has
-     * no delete, so a disabled row is the closest the current API
-     * allows; it disappears from `listMcpServers(onlyEnabled = true)`
-     * and from [McpManager.connectAll]. Returns false when the id is
-     * unknown.
+     * from the hub-owned store. Remote servers are hard-deleted from the
+     * registry via [McpManager.deleteServer] (live connection dropped,
+     * row removed). Returns false when the id is unknown.
      */
     suspend fun removeMcpServer(serverId: String): Boolean = withContext(Dispatchers.IO) {
         stdioMutex.withLock {
@@ -307,20 +302,7 @@ class McpHub(
                 return@withContext true
             }
         }
-        val server = mcpManager.listServers().firstOrNull { it.id == serverId } ?: return@withContext false
-        // Already removed (soft-disabled): a second removal is a no-op.
-        if (!server.enabled) return@withContext false
-        mcpManager.disconnect(serverId)
-        mcpManager.addServer(
-            McpServerConfig(
-                id = server.id,
-                name = server.name,
-                url = server.endpointUrl,
-                transport = McpTransport.REMOTE,
-                enabled = false,
-            )
-        )
-        true
+        mcpManager.deleteServer(serverId)
     }
 
     /** Drops a server's live connection (remote client / stdio process). */

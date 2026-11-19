@@ -75,6 +75,9 @@ class McpManagerTest {
             servers.removeAll { it.id == server.id }
             servers += server
         }
+
+        override suspend fun deleteServer(serverId: String): Boolean =
+            servers.removeAll { it.id == serverId }
     }
 
     private val initializeOk = CannedResponse(
@@ -163,6 +166,24 @@ class McpManagerTest {
         // Registry holds it, but connecting a stdio server is blocked (M4).
         assertFalse(runBlocking { manager.connect(McpServerConfig(stdio.id, stdio.name, stdio.endpointUrl, McpTransport.STDIO)) })
         assertFalse(runBlocking { manager.isConnected("mcp_local1") })
+    }
+
+    @Test
+    fun deleteServer_removesRowAndDropsConnection() = runBlocking {
+        val entity = McpServerEntity("s1", "docs", "https://docs.example.com/mcp", true)
+        val store = FakeMcpServerStore(listOf(entity))
+        val clients = mapOf(
+            "https://docs.example.com/mcp" to clientFor(mapOf("initialize" to initializeOk)),
+        )
+        val manager = managerFor(store, clients)
+        assertTrue(manager.connect(entity))
+        assertTrue(manager.isConnected("s1"))
+        assertTrue(manager.deleteServer("s1"))
+        assertFalse(manager.isConnected("s1"))
+        assertTrue(manager.listServers().isEmpty())
+        // A second delete is a no-op returning false; unknown ids too.
+        assertFalse(manager.deleteServer("s1"))
+        assertFalse(manager.deleteServer("no-such-server"))
     }
 
     // --- Connection lifecycle ---

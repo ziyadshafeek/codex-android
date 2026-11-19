@@ -86,6 +86,9 @@ data class McpServerConfig(
 interface McpServerStore {
     suspend fun listServers(onlyEnabled: Boolean = false): List<McpServerEntity>
     suspend fun saveServer(server: McpServerEntity)
+
+    /** Hard-deletes the server row. Returns true when a row was removed. */
+    suspend fun deleteServer(serverId: String): Boolean
 }
 
 /** [McpServerStore] backed by the existing `mcp_servers` table. */
@@ -96,6 +99,9 @@ class DatabaseMcpServerStore(private val database: CodexDatabase) : McpServerSto
     override suspend fun saveServer(server: McpServerEntity) {
         database.upsertMcpServer(server)
     }
+
+    override suspend fun deleteServer(serverId: String): Boolean =
+        database.deleteMcpServer(serverId)
 }
 
 class McpManager(
@@ -180,6 +186,17 @@ class McpManager(
         }
         serverStore.saveServer(entity)
         return entity
+    }
+
+    /**
+     * Hard-deletes a registered server: drops its live connection and
+     * removes the row from the store. Returns false when the id is
+     * unknown (a second delete is a no-op returning false).
+     */
+    suspend fun deleteServer(serverId: String): Boolean {
+        if (serverStore.listServers().none { it.id == serverId }) return false
+        disconnect(serverId)
+        return serverStore.deleteServer(serverId)
     }
 
     // --- Connection lifecycle ---

@@ -780,6 +780,15 @@ class CodexDatabase(context: Context) :
             out
         }
 
+    /**
+     * Hard-deletes an MCP server row. Returns true when a row was
+     * removed, false when the id was unknown. The caller drops the
+     * live connection first (see [dev.codex.android.mcp.McpManager.deleteServer]).
+     */
+    suspend fun deleteMcpServer(serverId: String): Boolean = withContext(Dispatchers.IO) {
+        writableDatabase.delete(TABLE_MCP_SERVERS, "id = ?", arrayOf(serverId)) > 0
+    }
+
     suspend fun recordAudit(
         threadId: String,
         toolName: String,
