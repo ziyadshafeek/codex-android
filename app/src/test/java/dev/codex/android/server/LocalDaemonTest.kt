@@ -46,18 +46,20 @@ class LocalDaemonTest {
         val messages = mutableListOf<TimelineMessage>()
         private var counter = 0
 
-        // Defaults repeat the interface's: default arguments resolve
-        // against the static (concrete) type, so the fake needs them too.
-        override suspend fun listThreads(
-            workspaceId: String = CodexDatabase.DEFAULT_PHONE_WORKSPACE_ID,
-        ): List<ThreadEntity> =
+        // Overriding functions may NOT redeclare default values
+        // (Kotlin forbids it), so the fake's overrides take all
+        // parameters explicitly; direct calls on the fake below pass
+        // the workspace id explicitly, while calls through the
+        // [DaemonThreadStore] interface (e.g. from [LocalDaemon])
+        // still get the interface defaults.
+        override suspend fun listThreads(workspaceId: String): List<ThreadEntity> =
             threads.filter { it.workspaceId == workspaceId }.toList()
 
-        override suspend fun getMessages(threadId: String, limit: Int = 200): List<TimelineMessage> =
+        override suspend fun getMessages(threadId: String, limit: Int): List<TimelineMessage> =
             messages.filter { it.threadId == threadId }.take(limit)
 
         override suspend fun createThread(
-            workspaceId: String = CodexDatabase.DEFAULT_PHONE_WORKSPACE_ID,
+            workspaceId: String,
             title: String,
             mode: String,
         ): ThreadEntity {
@@ -168,7 +170,11 @@ class LocalDaemonTest {
 
     @Test
     fun dispatch_threadsAndMessages_roundTrip() = runBlocking {
-        val thread = store.createThread(title = "Demo", mode = "AUTO")
+        val thread = store.createThread(
+            workspaceId = CodexDatabase.DEFAULT_PHONE_WORKSPACE_ID,
+            title = "Demo",
+            mode = "AUTO",
+        )
         // TimelineMessage field order (verified against the real data
         // class): id, threadId, role, kind, content, metadataJson, createdAt.
         store.appendMessage(
@@ -192,7 +198,7 @@ class LocalDaemonTest {
         assertEquals(202, resp.status)
         assertTrue(resp.body.contains("threadId"))
 
-        val threads = store.listThreads()
+        val threads = store.listThreads(CodexDatabase.DEFAULT_PHONE_WORKSPACE_ID)
         assertEquals(1, threads.size)
         val threadId = threads.single().id
         assertTrue(resp.body.contains(threadId))
@@ -205,12 +211,16 @@ class LocalDaemonTest {
 
     @Test
     fun dispatch_turnWithProvidedThreadId_reusesIt() = runBlocking {
-        val thread = store.createThread(title = "Existing", mode = "AUTO")
+        val thread = store.createThread(
+            workspaceId = CodexDatabase.DEFAULT_PHONE_WORKSPACE_ID,
+            title = "Existing",
+            mode = "AUTO",
+        )
         val resp = daemon.dispatch(
             authedRequest("POST", "/v1/turn", """{"threadId":"${thread.id}","goal":"Continue"}"""),
         )
         assertEquals(202, resp.status)
-        assertEquals(1, store.listThreads().size)
+        assertEquals(1, store.listThreads(CodexDatabase.DEFAULT_PHONE_WORKSPACE_ID).size)
         assertEquals(thread.id, starter.started.single().threadId)
     }
 
