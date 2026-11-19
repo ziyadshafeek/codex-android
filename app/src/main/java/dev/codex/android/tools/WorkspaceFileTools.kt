@@ -1,7 +1,6 @@
 package dev.codex.android.tools
 
 import java.io.File
-import java.util.concurrent.ConcurrentHashMap
 
 data class FileChangeSummary(
     val relativePath: String,
@@ -16,7 +15,10 @@ class WorkspaceFileTools(workspaceDir: File) {
     private val rootCanonical: File = workspaceDir.apply { mkdirs() }.canonicalFile
 
     // Maps relative path -> original file text before first edit (null = file did not exist).
-    private val originalSnapshots = ConcurrentHashMap<String, String?>()
+    // Plain HashMap, NOT ConcurrentHashMap: ConcurrentHashMap forbids null values,
+    // and null is the legitimate "did not exist" sentinel here (putting null throws
+    // NullPointerException). Access is guarded by @Synchronized on the methods below.
+    private val originalSnapshots = HashMap<String, String?>()
 
     /**
      * Strictly resolves [relativePath] inside [rootCanonical], rejecting ".." escapes
@@ -44,6 +46,7 @@ class WorkspaceFileTools(workspaceDir: File) {
     private fun relPath(file: File): String =
         file.canonicalFile.relativeTo(rootCanonical).path.replace(File.separatorChar, '/')
 
+    @Synchronized
     private fun snapshotIfNeeded(file: File) {
         val key = relPath(file)
         if (!originalSnapshots.containsKey(key)) {
@@ -130,6 +133,7 @@ class WorkspaceFileTools(workspaceDir: File) {
     }
 
     /** Produces structured diffs for the Changes / Diff Review screen. */
+    @Synchronized
     fun getChanges(): List<FileChangeSummary> {
         return originalSnapshots.entries.sortedBy { it.key }.mapNotNull { (path, before) ->
             val file = resolveSafe(path)
@@ -150,6 +154,7 @@ class WorkspaceFileTools(workspaceDir: File) {
         }
     }
 
+    @Synchronized
     fun revertFile(relativePath: String): Boolean {
         val key = relPath(resolveSafe(relativePath))
         if (!originalSnapshots.containsKey(key)) return false
@@ -164,6 +169,7 @@ class WorkspaceFileTools(workspaceDir: File) {
         return true
     }
 
+    @Synchronized
     fun revertAll() {
         originalSnapshots.keys.toList().forEach { revertFile(it) }
     }

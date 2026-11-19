@@ -63,6 +63,10 @@ class McpClientTest {
                 .protocol(Protocol.HTTP_1_1)
                 .code(canned.code)
                 .message(if (canned.code == 200) "OK" else "Error")
+                // Content-Type must be a real response HEADER: McpClient reads
+                // response.header("Content-Type") to detect the SSE envelope, and
+                // ResponseBody's media type alone does not populate it.
+                .header("Content-Type", canned.contentType)
                 .body(canned.body.toResponseBody(canned.contentType.toMediaType()))
             canned.sessionId?.let { builder.header("Mcp-Session-Id", it) }
             return builder.build()
