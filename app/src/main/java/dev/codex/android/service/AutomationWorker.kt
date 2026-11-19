@@ -78,6 +78,14 @@ class AutomationWorker(
         const val KEY_AUTOMATION_ID = "automation_id"
 
         /**
+         * One-shot prompt for a fired scheduled task (see TaskReceiver):
+         * when set, the worker runs this prompt once instead of loading
+         * a stored automation. [KEY_ONE_SHOT_TITLE] is the display title.
+         */
+        const val KEY_ONE_SHOT_PROMPT = "one_shot_prompt"
+        const val KEY_ONE_SHOT_TITLE = "one_shot_title"
+
+        /**
          * WorkManager stops a worker after ~10 minutes. Stop waiting
          * (and stop the run) just before that, so the timeout is recorded
          * cleanly instead of the worker being killed mid-run.
@@ -89,6 +97,15 @@ class AutomationWorker(
     }
 
     override suspend fun doWork(): Result {
+        // One-shot path (fired scheduled task): run the prompt once on a
+        // fresh thread, with no stored-automation bookkeeping.
+        val oneShotPrompt = inputData.getString(KEY_ONE_SHOT_PROMPT)
+        if (oneShotPrompt != null) {
+            return runOneShot(
+                prompt = oneShotPrompt,
+                title = inputData.getString(KEY_ONE_SHOT_TITLE) ?: "Scheduled task",
+            )
+        }
         val id = inputData.getString(KEY_AUTOMATION_ID) ?: return Result.failure()
         val db = CodexDatabase.getInstance(applicationContext)
         val automation = db.getAutomation(id) ?: return Result.success()
@@ -164,6 +181,67 @@ class AutomationWorker(
             // scope, so stop the run too — otherwise it would keep
             // running (and spending the user's model budget) after this
             // worker is gone. Propagate the cancellation.
+            AgentRuntime.stop(thread.id)
+            throw e
+        }
+    }
+
+    /**
+     * Runs a one-shot scheduled-task prompt (TaskReceiver) on a fresh
+     * thread and lands the result in the Review Inbox, mirroring the
+     * automation path minus the stored-automation bookkeeping. Without
+     * this, a fired task only notified and never executed its prompt.
+     */
+    private suspend fun runOneShot(prompt: String, title: String): Result {
+        val db = CodexDatabase.getInstance(applicationContext)
+        val keyStore = KeyStore(applicationContext)
+        val baseUrl = keyStore.getBaseUrl()
+        val apiKey = keyStore.getApiKey()
+        if (!keyStore.hasKey() || baseUrl.isBlank() || apiKey.isNullOrBlank()) {
+            // No key to run with: record the miss as an error thread so
+            // it is visible in History instead of vanishing silently.
+            val thread = db.createThread(
+                workspaceId = CodexDatabase.DEFAULT_PHONE_WORKSPACE_ID,
+                title = "Scheduled: $title",
+                mode = ExecutionMode.AUTO.name,
+            )
+            db.updateThreadState(thread.id, status = "error", unread = true)
+            return Result.success()
+        }
+        val thread = db.createThread(
+            workspaceId = CodexDatabase.DEFAULT_PHONE_WORKSPACE_ID,
+            title = "Scheduled: $title",
+            mode = ExecutionMode.AUTO.name,
+        )
+        val started = AgentRuntime.startTurn(
+            applicationContext,
+            thread.id,
+            prompt,
+            ExecutionMode.AUTO,
+            MAX_STEPS,
+        ) {
+            runAutomationTurn(this, thread.id, prompt, baseUrl, apiKey, keyStore.getModel())
+        }
+        if (!started) return Result.success()
+        return try {
+            withTimeout(WORK_TIMEOUT_MS) {
+                AgentRuntime.threads.first { states ->
+                    states[thread.id]?.isRunning == false
+                }
+            }
+            val failed = db.listThreads().firstOrNull { it.id == thread.id }?.status == "error" ||
+                lastAssistantMessageFailed(db, thread.id)
+            db.updateThreadState(
+                thread.id,
+                status = if (failed) "error" else "needs_review",
+                unread = true,
+            )
+            if (failed) Result.retry() else Result.success()
+        } catch (e: TimeoutCancellationException) {
+            AgentRuntime.stop(thread.id)
+            db.updateThreadState(thread.id, status = "error", unread = true)
+            Result.retry()
+        } catch (e: CancellationException) {
             AgentRuntime.stop(thread.id)
             throw e
         }

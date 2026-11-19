@@ -225,8 +225,11 @@ data class UiNode(
             }
             // Id 0 is the root (handled above); ids 1.. are the included
             // descendants in pre-order, exactly as [buildUiTree] assigns.
+            // visited seeds at 1, like buildUiTree: the root itself counts
+            // as visited, so the MAX_NODES cap trips at the same node in
+            // both walks and an id from toCompactText always resolves.
             var nextId = 1
-            var visited = 0
+            var visited = 1
 
             fun walk(node: AccessibilityNodeInfo, depth: Int): AccessibilityNodeInfo? {
                 if (visited >= MAX_NODES || depth > MAX_DEPTH) return null
@@ -249,9 +252,12 @@ data class UiNode(
             }
 
             // The root itself is id 0 and is handled above; the walk
-            // starts at the root's children.
+            // starts at the root's children. Same outer break as
+            // buildUiTree: once the cap is hit, no further subtree is
+            // entered (walk would return null at once anyway).
             val childCount = runCatching { root.childCount }.getOrDefault(0)
             for (i in 0 until childCount) {
+                if (visited >= MAX_NODES) break
                 val child = runCatching { root.getChild(i) }.getOrNull() ?: continue
                 val found = walk(child, 1)
                 if (found != null) {

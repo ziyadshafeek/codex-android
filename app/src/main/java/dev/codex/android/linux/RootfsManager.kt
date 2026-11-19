@@ -191,19 +191,28 @@ object RootfsVerifier {
                     count++
                 }
                 '2' -> {
-                    // Symlink inside rootfs: skip payload and ignore links escaping rootfs.
+                    // Symlink inside rootfs: only links that resolve inside
+                    // the rootfs are created. A ".." that stays inside
+                    // (e.g. usr/bin/env -> ../../bin/busybox) is fine;
+                    // only escapes are dropped. Absolute targets are
+                    // rewritten relative so the link points inside the
+                    // rootfs, not at the host root. Counted only when the
+                    // link is actually created.
                     skipExact(input, size + padding)
                     val linkTarget = parseCString(header, 157, 100)
-                    if (linkTarget.isNotBlank() && !linkTarget.contains("..")) {
-                        runCatching {
-                            target.parentFile?.mkdirs()
-                            java.nio.file.Files.deleteIfExists(target.toPath())
-                            java.nio.file.Files.createSymbolicLink(
-                                target.toPath(),
-                                java.nio.file.Paths.get(linkTarget),
-                            )
+                    if (linkTarget.isNotBlank()) {
+                        val safeTarget = safeSymlinkTarget(destCanonical, target, linkTarget)
+                        if (safeTarget != null) {
+                            val created = runCatching {
+                                target.parentFile?.mkdirs()
+                                java.nio.file.Files.deleteIfExists(target.toPath())
+                                java.nio.file.Files.createSymbolicLink(
+                                    target.toPath(),
+                                    safeTarget,
+                                )
+                            }.isSuccess
+                            if (created) count++
                         }
-                        count++
                     }
                 }
                 else -> {
@@ -213,6 +222,29 @@ object RootfsVerifier {
             }
         }
         return count
+    }
+
+    /**
+     * Resolves a tar symlink [linkTarget] (as stored) to the link text to
+     * actually create for the link at [linkFile], or null when the target
+     * escapes [destDir]. Relative targets resolve against the link's parent
+     * directory; absolute targets resolve against the rootfs root and are
+     * rewritten relative, so the created link never points at the host
+     * filesystem. The returned path is relative to the link's parent, so
+     * the symlink works wherever the rootfs is extracted.
+     */
+    internal fun safeSymlinkTarget(destDir: File, linkFile: File, linkTarget: String): java.nio.file.Path? {
+        if (linkTarget.contains('\u0000')) return null
+        val destCanonical = destDir.canonicalFile
+        val parent = linkFile.parentFile?.canonicalFile ?: destCanonical
+        val resolved = if (linkTarget.startsWith("/")) {
+            File(destCanonical, linkTarget.trimStart('/')).canonicalFile
+        } else {
+            File(parent, linkTarget).canonicalFile
+        }
+        val prefix = destCanonical.path + File.separator
+        if (resolved != destCanonical && !resolved.path.startsWith(prefix)) return null
+        return parent.toPath().relativize(resolved.toPath())
     }
 
     private fun parseTarName(header: ByteArray): String {
@@ -557,6 +589,8 @@ class RootfsManager internal constructor(
     companion object {
         const val ARTIFACT_ALPINE_ROOTFS = "alpine-minirootfs-aarch64"
         const val ARTIFACT_PROOT_DEB = "proot-deb"
+        const val ARTIFACT_LIBTALLOC_DEB = "libtalloc-deb"
+        const val ARTIFACT_LIBANDROID_SHMEM_DEB = "libandroid-shmem-deb"
 
         private const val INSTALLED_MARKER = ".codex_rootfs_ready"
 
@@ -577,6 +611,14 @@ class RootfsManager internal constructor(
          * The Termux `.deb` is the real upstream distribution for PRoot, and
          * the Alpine minirootfs already ships `./bin/busybox`, so no host-side
          * BusyBox artifact is needed at all.
+         *
+         * libproot.so dynamically links libtalloc.so.2 + libandroid-shmem.so
+         * (readelf-verified on the real binary): without those two libraries
+         * in the same nativeLibraryDir, execve fails with "library not
+         * found" and the whole Linux terminal is dead. They are pinned here
+         * as first-class artifacts (same .deb + per-binary hash discipline)
+         * and staged into jniLibs by CI; ProotShellEngine puts
+         * nativeLibraryDir at the head of the child LD_LIBRARY_PATH.
          */
         val PINNED_ARTIFACTS: List<PinnedArtifact> = listOf(
             PinnedArtifact(
@@ -605,6 +647,43 @@ class RootfsManager internal constructor(
                         tarPath = "data/data/com.termux/files/usr/libexec/proot/loader",
                         stagedFileName = "libproot-loader.so",
                         expectedSha256 = "1da54355333cca3fb6ee10e3b82a24df24fb230c99241ce83809bf9e240609b5",
+                    ),
+                ),
+            ),
+            PinnedArtifact(
+                id = ARTIFACT_LIBTALLOC_DEB,
+                url = "https://packages.termux.dev/apt/termux-main/pool/main/libt/libtalloc/libtalloc_2.5.0_aarch64.deb",
+                expectedSha256 = "556591f43bb773ad8777e1a29522640866a55f95dab71914418b94a8c58ad5a7",
+                // LGPL-3.0-or-later (Samba talloc; Debian copyright lists
+                // lib/talloc/* as LGPL-3+). NOT GPL-3.0.
+                license = "LGPL-3.0-or-later",
+                destinationRelativePath = "jniLibs/arm64-v8a/",
+                extractedBinaries = listOf(
+                    ExtractedBinary(
+                        // The real file is libtalloc.so.2.5.0; libtalloc.so.2
+                        // is a symlink to it. Staging through the symlink
+                        // copies the real content under the SONAME the
+                        // loader looks up.
+                        tarPath = "data/data/com.termux/files/usr/lib/libtalloc.so.2",
+                        stagedFileName = "libtalloc.so.2",
+                        expectedSha256 = "742b438c4d09e276985a61d44164c9de207b6d8cc268f3018cb3001961bcb309",
+                    ),
+                ),
+            ),
+            PinnedArtifact(
+                id = ARTIFACT_LIBANDROID_SHMEM_DEB,
+                url = "https://packages.termux.dev/apt/termux-main/pool/main/liba/libandroid-shmem/libandroid-shmem_0.7_aarch64.deb",
+                expectedSha256 = "0da3a24d558b93c92bcf8d611e0826a99ff96e396b148e6cdf33b47c47c57ff6",
+                // BSD-3-Clause (termux/libandroid-shmem LICENSE:
+                // (c) 2013 Sergii Pylypenko, (c) 2017 Fredrik Fornwall).
+                // NOT GPL-3.0.
+                license = "BSD-3-Clause",
+                destinationRelativePath = "jniLibs/arm64-v8a/",
+                extractedBinaries = listOf(
+                    ExtractedBinary(
+                        tarPath = "data/data/com.termux/files/usr/lib/libandroid-shmem.so",
+                        stagedFileName = "libandroid-shmem.so",
+                        expectedSha256 = "84475798e07c8174dbbfaec70a827fdb02f19ffa69a589380c13e7507fd0e731",
                     ),
                 ),
             ),

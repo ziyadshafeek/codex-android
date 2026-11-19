@@ -463,6 +463,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      * events carry one full turn's text each — streamingAssistantText
      * therefore grows per model turn, not per token.
      */
+/**
+ * True when a Finished answer should be appended as a new bubble: false
+ * when the same text is already the last assistant message (AgentLoop
+ * emits the final turn's text as both AssistantText and Finished).
+ * Pure helper, JVM-testable: see ChatFinishedDedupeTest.
+ */
+internal fun shouldAppendFinished(messages: List<ChatUiMessage>, answer: String): Boolean {
+    val lastAssistant = messages.lastOrNull { it.role == "assistant" && !it.isError }
+    return lastAssistant?.text != answer
+}
+
     private suspend fun runAgentTurn(
         turn: AgentRuntime.TurnContext,
         threadId: String,
@@ -611,7 +622,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             )
                         is AgentEvent.Finished -> {
                             finishedEmitted.set(true)
-                            append(ChatUiMessage("assistant", event.answer))
+                            // AgentLoop emits AssistantText with the turn's
+                            // text AND Finished with the same text as the
+                            // answer, so appending both shows the reply
+                            // twice. Append only when the answer is not
+                            // already the last assistant bubble.
+                            if (shouldAppendFinished(_messages.value, event.answer)) {
+                                append(ChatUiMessage("assistant", event.answer))
+                            }
                         }
                     }
                 },
@@ -735,6 +753,14 @@ private class PolicyApprovalGate(
                 durationMs = 0,
             )
             return false
+        }
+        if (decision == PolicyDecision.ALLOW) {
+            // Explicit user allow (ALWAYS rule or a session grant):
+            // without this the gate prompts for every sensitive tool
+            // even after the user tapped "Always allow". ALLOW here can
+            // only come from an explicit allow — the default matrix
+            // never returns ALLOW for EXTERNAL_OR_DESTRUCTIVE risk.
+            return true
         }
         return realGate.requestApproval(action)
     }

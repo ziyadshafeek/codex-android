@@ -33,6 +33,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
@@ -612,7 +613,9 @@ class SubagentOrchestrator private constructor(
         // the row, or a fast failure is lost and the subagent reads
         // "running" forever. (CI caught this race: the launched job won
         // the scheduling race and updated a list the row had not joined.)
-        _subagents.value = _subagents.value + info
+        // Atomic update: a plain read-modify-write here can lose to a
+        // concurrent updateInfo from a finishing job (lost-update race).
+        _subagents.update { it + info }
         val job = scope.launch {
             var threadId: String? = null
             try {
@@ -673,7 +676,15 @@ class SubagentOrchestrator private constructor(
         val removed = _subagents.value.firstOrNull { it.id == subagentId } ?: return false
         threadIds.remove(subagentId)?.let { turnRunner.stopTurn(it) }
         jobs.remove(subagentId)?.cancel()
-        _subagents.value = _subagents.value - removed
+        // Remove by ID, not by object equality: the cancelled job's
+        // catch runs concurrently and replaces this row with a
+        // status="stopped" copy, so removing the captured object (data
+        // class equality, status included) silently removes nothing.
+        // Both this removal and updateInfo use atomic .update: plain
+        // read-modify-write lets a stale updateInfo write land after
+        // the removal and resurrect the row (the lost-update half of
+        // the same race — CI flake at the isEmpty assert).
+        _subagents.update { current -> current.filterNot { it.id == removed.id } }
         return true
     }
 
@@ -690,7 +701,10 @@ class SubagentOrchestrator private constructor(
     }
 
     private fun updateInfo(id: String, block: (SubagentInfo) -> SubagentInfo) {
-        _subagents.value = _subagents.value.map { if (it.id == id) block(it) else it }
+        // Atomic update (CAS loop): a plain read-modify-write here can
+        // land after a concurrent killSubagent removal and resurrect the
+        // removed row — the lost-update half of the kill race.
+        _subagents.update { current -> current.map { if (it.id == id) block(it) else it } }
     }
 }
 

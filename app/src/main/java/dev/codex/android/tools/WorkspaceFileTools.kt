@@ -88,7 +88,17 @@ class WorkspaceFileTools(workspaceDir: File) {
         val file = resolveSafe(relativePath)
         if (!file.exists() || !file.isFile) return "Error: file not found: $relativePath"
         val current = file.readText()
-        val occurrences = current.windowed(oldSnippet.length) { it == oldSnippet }.count { it }
+        // Count occurrences with indexOf, not windowed(): windowed()
+        // allocates one String per character position of the whole file
+        // just to count. Overlapping matches still count (step +1).
+        var occurrences = 0
+        var fromIndex = 0
+        while (true) {
+            val found = current.indexOf(oldSnippet, fromIndex)
+            if (found < 0) break
+            occurrences++
+            fromIndex = found + 1
+        }
         if (occurrences == 0) {
             return "Error: target snippet not found in $relativePath"
         }

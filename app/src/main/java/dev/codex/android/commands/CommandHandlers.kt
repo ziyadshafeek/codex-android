@@ -1,5 +1,8 @@
 package dev.codex.android.commands
 
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import android.content.ContentValues
 import dev.codex.android.agent.AgentRuntime
 import dev.codex.android.api.ConnectionTestResult
@@ -548,8 +551,20 @@ object CommandHandlers {
     /** Pure metadata helper, JVM-testable: see SlashCommandRouterTest. */
     internal fun withCompactedFlag(metadataJson: String): String {
         val trimmed = metadataJson.trim()
-        if ("compacted" in trimmed) return metadataJson
         if (trimmed.isEmpty() || trimmed == "{}") return """{"compacted":true}"""
+        // Check the real "compacted" KEY, not a substring: the old
+        // `"compacted" in trimmed` test skipped marking whenever the word
+        // appeared anywhere (e.g. inside another value). Unparseable
+        // metadata falls back to the substring test so a row we cannot
+        // read is never corrupted.
+        val alreadyMarked = try {
+            val parsed = dev.codex.android.core.CodexJson.parseToJsonElement(trimmed)
+            val obj = parsed as? JsonObject
+            obj?.get("compacted")?.jsonPrimitive?.booleanOrNull == true
+        } catch (e: Exception) {
+            "compacted" in trimmed
+        }
+        if (alreadyMarked) return metadataJson
         if (trimmed.endsWith("}")) {
             return trimmed.dropLast(1) + ""","compacted":true}"""
         }

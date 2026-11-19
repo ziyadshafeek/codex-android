@@ -16,6 +16,8 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.util.concurrent.TimeUnit
 
 /**
@@ -64,9 +66,15 @@ class OkHttpOpenAiClient(
             .writeTimeout(30, TimeUnit.SECONDS)
             .build()
 
-        private fun normaliseBaseUrl(raw: String): String {
+        /**
+         * Strips a pasted `/chat/completions` suffix: providers show the
+         * full endpoint URL, and appending it again would request
+         * `.../chat/completions/chat/completions` (404). Internal for
+         * JVM tests: see OpenAiClientTest.
+         */
+        internal fun normaliseBaseUrl(raw: String): String {
             val trimmed = raw.trim().trimEnd('/')
-            return trimmed
+            return trimmed.removeSuffix("/chat/completions").trimEnd('/')
         }
     }
 
@@ -77,8 +85,12 @@ class OkHttpOpenAiClient(
         onPartialText: ((String) -> Unit)?,
     ): ChatResult {
         val effectiveModel = model.ifBlank { this.model }
-        return withRetry(policy = retryPolicy) {
-            chatOnce(messages, tools, effectiveModel, onPartialText)
+        // Blocking OkHttp execute() + stream reads: confine to the IO
+        // dispatcher — the agent runtime drives chat() from Default.
+        return withContext(Dispatchers.IO) {
+            withRetry(policy = retryPolicy) {
+                chatOnce(messages, tools, effectiveModel, onPartialText)
+            }
         }
     }
 
@@ -153,7 +165,16 @@ class OkHttpOpenAiClient(
         val toolCallArgs = mutableMapOf<Int, StringBuilder>()
         var finishReason: String? = null
         body.source().use { source ->
-            while (!source.exhausted()) {
+            while (true) {
+                // exhausted() itself throws on a broken stream: guard it
+                // (a mid-stream drop must be a retryable Network error,
+                // not an Unknown one).
+                val exhausted = try {
+                    source.exhausted()
+                } catch (e: IOException) {
+                    throw CodexError.Network(e)
+                }
+                if (exhausted) break
                 val line = try {
                     source.readUtf8Line() ?: break
                 } catch (e: IOException) {

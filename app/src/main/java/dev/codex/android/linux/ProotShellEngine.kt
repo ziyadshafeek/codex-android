@@ -2,7 +2,9 @@ package dev.codex.android.linux
 
 import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
@@ -142,10 +144,16 @@ open class StdioProcess internal constructor(
 
     /**
      * Reads one stdout line, or null on timeout ([timeoutMs]) or EOF.
+     * Queued lines ahead of EOF are drained first: EOF is reported only
+     * once the queue is empty AND the reader thread has finished, so a
+     * line that arrived before the stream ended is never dropped.
      * After EOF, returns null immediately without waiting. The timeout is a
      * floor of 0 (no waiting); negative values behave as 0.
      */
     open suspend fun readLine(timeoutMs: Long): String? = withContext(Dispatchers.IO) {
+        // Drain anything already queued: the reader thread sets eofSeen
+        // before enqueueing EOF_SENTINEL, so lines can sit ahead of it.
+        lineQueue.poll()?.let { return@withContext if (it === EOF_SENTINEL) null else it as String }
         if (eofSeen) return@withContext null
         val item = lineQueue.poll(timeoutMs.coerceAtLeast(0L), TimeUnit.MILLISECONDS)
         if (item === EOF_SENTINEL) null else item as String?
@@ -258,7 +266,15 @@ open class ProotShellEngine(
                 argv += listOf("-b", "$hostPath:$guestPath")
             }
         }
-        argv += listOf("-w", workingDirInGuest)
+        // The guest working directory must exist inside the rootfs:
+        // /workspace only exists when a workspace is bound. Without a
+        // bind (e.g. ensureToolchain), the default -w /workspace points
+        // at a directory that does not exist in the Alpine minirootfs,
+        // so proot fails to start. Fall back to /root, which always exists.
+        val effectiveWorkdir =
+            if (workspaceBindDir == null && workingDirInGuest == DEFAULT_GUEST_WORKDIR) "/root"
+            else workingDirInGuest
+        argv += listOf("-w", effectiveWorkdir)
         return argv
     }
 
@@ -272,8 +288,25 @@ open class ProotShellEngine(
         env["PROOT_TMP_DIR"] = File(rootfsDir, "tmp").apply { mkdirs() }.absolutePath
         env["PROOT_LOADER"] = prootLoaderBinary().absolutePath
         env["PROOT_NO_SECCOMP"] = "1"
+        // libproot.so dynamically links libtalloc.so.2 + libandroid-shmem.so,
+        // which ship in the same nativeLibraryDir. The child linker only
+        // finds them if that directory heads LD_LIBRARY_PATH (the system
+        // paths stay after it, so system libs still resolve). The
+        // native-stage dir follows: on dev builds without packaged jniLibs,
+        // RootfsManager stages verified copies there.
+        val stageDir = rootfsDir.parentFile?.let { File(it, "native-stage") }
+        val ldPaths = listOfNotNull(nativeLibDir.absolutePath, stageDir?.absolutePath) +
+            System.getenv("LD_LIBRARY_PATH").orEmpty().split(":").filter { it.isNotBlank() }
+        env["LD_LIBRARY_PATH"] = ldPaths.distinct().joinToString(":")
         env.putAll(extraEnv)
         return env
+    }
+
+    /** True when the Alpine rootfs has been extracted (bin/sh or bin/busybox present). */
+    fun hasRootfs(): Boolean {
+        val root = rootfsDir
+        return root.isDirectory &&
+            (File(root, "bin/sh").isFile || File(root, "bin/busybox").isFile)
     }
 
     /**
@@ -302,6 +335,14 @@ open class ProotShellEngine(
                 stderr = "PRoot binary not found at ${proot.absolutePath}. Ensure jniLibs packaging is enabled.",
             )
         }
+        if (!hasRootfs()) {
+            return@withContext ShellResult(
+                exitCode = 127,
+                stdout = "",
+                stderr = "Linux rootfs is not installed at ${rootfsDir.absolutePath}. " +
+                    "Open the Terminal tab and start the shell first (it downloads and verifies the Alpine rootfs).",
+            )
+        }
         val argv = buildProotCommand(shellCommand = command, workingDirInGuest = workingDirInGuest)
         val pb = ProcessBuilder(argv)
             .directory(workspaceBindDir ?: rootfsDir)
@@ -322,13 +363,18 @@ open class ProotShellEngine(
 
         val stdoutBuf = StringBuilder()
         val stderrBuf = StringBuilder()
+        // Drain to EOF, not to the cap: stopping at MAX_OUTPUT_CHARS lets
+        // the child block forever on a full pipe (it keeps writing while
+        // nobody reads). Only the first MAX_OUTPUT_CHARS are kept.
         val outThread = Thread {
             runCatching {
                 process.inputStream.bufferedReader().use { r ->
                     val chunk = CharArray(4096)
                     var n: Int
-                    while (r.read(chunk).also { n = it } != -1 && stdoutBuf.length < MAX_OUTPUT_CHARS) {
-                        stdoutBuf.append(chunk, 0, minOf(n, MAX_OUTPUT_CHARS - stdoutBuf.length))
+                    while (r.read(chunk).also { n = it } != -1) {
+                        if (stdoutBuf.length < MAX_OUTPUT_CHARS) {
+                            stdoutBuf.append(chunk, 0, minOf(n, MAX_OUTPUT_CHARS - stdoutBuf.length))
+                        }
                     }
                 }
             }
@@ -339,15 +385,28 @@ open class ProotShellEngine(
                 process.errorStream.bufferedReader().use { r ->
                     val chunk = CharArray(4096)
                     var n: Int
-                    while (r.read(chunk).also { n = it } != -1 && stderrBuf.length < MAX_OUTPUT_CHARS) {
-                        stderrBuf.append(chunk, 0, minOf(n, MAX_OUTPUT_CHARS - stderrBuf.length))
+                    while (r.read(chunk).also { n = it } != -1) {
+                        if (stderrBuf.length < MAX_OUTPUT_CHARS) {
+                            stderrBuf.append(chunk, 0, minOf(n, MAX_OUTPUT_CHARS - stderrBuf.length))
+                        }
                     }
                 }
             }
         }.apply { isDaemon = true; start() }
 
         try {
-            val finished = process.waitFor(timeoutMs.coerceAtLeast(100L), TimeUnit.MILLISECONDS)
+            // runInterruptible: a coroutine cancellation interrupts the
+            // blocking waitFor instead of orphaning a live proot process.
+            val finished = try {
+                runInterruptible {
+                    process.waitFor(timeoutMs.coerceAtLeast(100L), TimeUnit.MILLISECONDS)
+                }
+            } catch (e: CancellationException) {
+                killProcessGroup(pid, process)
+                outThread.join(500)
+                errThread.join(500)
+                throw e
+            }
             if (!finished) {
                 killProcessGroup(pid, process)
                 outThread.join(500)
@@ -467,10 +526,15 @@ open class ProotShellEngine(
 
         val termuxSession: TerminalSession? = if (sessionClient != null && prootBinary().isFile) {
             runCatching {
+                // Full argv: JNI_createSubprocess builds the child argv
+                // ONLY from this array and execvp()s it — nothing prepends
+                // the program name. Passing argv.drop(1) swallowed
+                // --kill-on-exit (proot skips argv[0] as the program name)
+                // and hid libproot.so from /proc cmdline.
                 TerminalSession(
                     argv.first(),
                     workDir.absolutePath,
-                    argv.drop(1).toTypedArray(),
+                    argv.toTypedArray(),
                     envPairs,
                     DEFAULT_TRANSCRIPT_ROWS,
                     sessionClient,
@@ -556,7 +620,14 @@ open class ProotShellEngine(
 
     internal fun diagnosePhantomProcessesFromProc(procDir: File): String {
         val activePids = buildSet {
-            sessions.values.forEach { if (it.pid > 0L) add(it.pid) }
+            sessions.values.forEach {
+                // Read the LIVE pid: PtySession.pid is captured at
+                // construction (often -1 — the subprocess may not have a
+                // pid yet), while TerminalSession.pid tracks the running
+                // process. killSession already reads it this way.
+                val livePid = it.terminalSession?.pid?.toLong()?.takeIf { pid -> pid > 0L } ?: it.pid
+                if (livePid > 0L) add(livePid)
+            }
             activeProcesses.values.forEach {
                 val p = extractProcessPid(it)
                 if (p > 0L) add(p)

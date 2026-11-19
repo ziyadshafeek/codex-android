@@ -12,6 +12,7 @@ import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.Looper
 import android.util.DisplayMetrics
 import android.util.Log
 import android.view.WindowManager
@@ -75,6 +76,20 @@ object MediaProjectionCapture {
     @Volatile
     private var projection: MediaProjection? = null
 
+    /**
+     * The system tells us when the projection dies (user revokes it from
+     * the status bar, the system reclaims it). Without this callback the
+     * stored projection stays non-null but dead: isReady() lies and every
+     * capture fails until the process restarts.
+     */
+    private val projectionCallback = object : MediaProjection.Callback() {
+        override fun onStop() {
+            projection = null
+            appContext = null
+            lastError = "Screen-capture consent ended — grant it again to capture"
+        }
+    }
+
     /** Application context captured at consent time (for metrics + cacheDir). */
     @Volatile
     private var appContext: Context? = null
@@ -110,6 +125,7 @@ object MediaProjectionCapture {
                 false
             } else {
                 release()
+                obtained.registerCallback(projectionCallback, Handler(Looper.getMainLooper()))
                 projection = obtained
                 appContext = context.applicationContext
                 lastError = null
@@ -231,7 +247,11 @@ object MediaProjectionCapture {
 
     /** Stops the projection and drops consent state. Call on logout / teardown. */
     fun release() {
-        runCatching { projection?.stop() }
+        val current = projection
+        // Unregister first so our own stop() does not re-enter onStop()
+        // (which would clear state we are already clearing).
+        runCatching { current?.unregisterCallback(projectionCallback) }
+        runCatching { current?.stop() }
         projection = null
         appContext = null
     }

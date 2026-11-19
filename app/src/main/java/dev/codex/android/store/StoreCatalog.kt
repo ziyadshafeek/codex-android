@@ -3,6 +3,8 @@ package dev.codex.android.store
 import android.content.Context
 import dev.codex.android.core.CodexJson
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import java.io.File
@@ -17,6 +19,14 @@ import java.io.File
  * provider, SDK, or charging code.
  */
 class StoreCatalog(context: Context) {
+
+    /**
+     * Serialises save/approve/remove: each is a read-modify-write on
+     * one JSON file, so two concurrent writers can silently lose one
+     * update. Reads (all/approved/pending) stay lock-free — a torn
+     * read just decodes to empty and retries on the next call.
+     */
+    private val mutex = Mutex()
 
     private val file: File = File(context.filesDir, "codex_store.json")
 
@@ -55,21 +65,27 @@ class StoreCatalog(context: Context) {
 
     /** Inserts or replaces [listing] by id. Never throws. */
     suspend fun save(listing: StoreListing) {
-        val updated = loadAll().filter { it.id != listing.id } + listing
-        saveAll(updated)
+        mutex.withLock {
+            val updated = loadAll().filter { it.id != listing.id } + listing
+            saveAll(updated)
+        }
     }
 
     /** Marks the listing with [id] as approved. No-op when missing. Never throws. */
     suspend fun approve(id: String) {
-        val listings = loadAll()
-        if (listings.none { it.id == id }) return
-        saveAll(listings.map { if (it.id == id) it.copy(approved = true) else it })
+        mutex.withLock {
+            val listings = loadAll()
+            if (listings.none { it.id == id }) return@withLock
+            saveAll(listings.map { if (it.id == id) it.copy(approved = true) else it })
+        }
     }
 
     /** Deletes the listing with [id]. No-op when missing. Never throws. */
     suspend fun remove(id: String) {
-        val listings = loadAll()
-        if (listings.none { it.id == id }) return
-        saveAll(listings.filter { it.id != id })
+        mutex.withLock {
+            val listings = loadAll()
+            if (listings.none { it.id == id }) return@withLock
+            saveAll(listings.filter { it.id != id })
+        }
     }
 }

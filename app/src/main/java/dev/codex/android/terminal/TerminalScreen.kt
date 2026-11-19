@@ -1,7 +1,9 @@
 package dev.codex.android.terminal
 
+import android.content.Context
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.inputmethod.InputMethodManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -44,6 +46,7 @@ import com.termux.view.TerminalView
 import com.termux.view.TerminalViewClient
 import dev.codex.android.linux.ProotShellEngine
 import dev.codex.android.linux.ShellResult
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 /**
@@ -102,6 +105,9 @@ fun TerminalScreen(
     val scope = rememberCoroutineScope()
     var quickCmd by remember { mutableStateOf("") }
     var terminalViewRef by remember { mutableStateOf<TerminalView?>(null) }
+    // Pinch-zoom text size, tracked here so onScale can apply it to the
+    // live view (the view itself is the source of truth after first set).
+    val textSizeState = remember { mutableStateOf(28) }
 
     val sessionClient = remember(stateHolder) {
         object : TerminalSessionClient {
@@ -134,8 +140,25 @@ fun TerminalScreen(
 
     val viewClient = remember(stateHolder) {
         object : TerminalViewClient {
-            override fun onScale(scale: Float): Float = scale.coerceIn(0.8f, 2.5f)
-            override fun onSingleTapUp(e: MotionEvent?) = Unit
+            // Pinch zoom actually resizes the terminal text: returning the
+            // coerced scale without applying it left the text unchanged.
+            override fun onScale(scale: Float): Float {
+                val view = terminalViewRef ?: return scale
+                val current = textSizeState.value
+                val newSize = (current * scale).toInt().coerceIn(10, 60)
+                if (newSize == current) return 1f
+                textSizeState.value = newSize
+                view.setTextSize(newSize)
+                return newSize.toFloat() / current
+            }
+            // A tap focuses the terminal and raises the keyboard: with an
+            // empty handler the view never received key input.
+            override fun onSingleTapUp(e: MotionEvent?) {
+                val view = terminalViewRef ?: return
+                view.requestFocus()
+                val imm = view.context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+                imm?.showSoftInput(view, 0)
+            }
             override fun shouldBackButtonBeMappedToEscape(): Boolean = false
             override fun shouldEnforceCharBasedInput(): Boolean = true
             override fun shouldUseCtrlSpaceWorkaround(): Boolean = false
@@ -150,10 +173,15 @@ fun TerminalScreen(
             override fun readFnKey(): Boolean = false
             override fun onCodePoint(codePoint: Int, ctrlDown: Boolean, session: TerminalSession?): Boolean {
                 val (ctrl, alt) = stateHolder.consumeLatchedModifiers()
-                if (!ctrl && !alt) return false
+                // The latch and the physically-held Ctrl are two sources
+                // of the same modifier: union them. Previously a held Ctrl
+                // with no latch fell through to the default path, which
+                // writes the raw code point and drops the modifier.
+                val useCtrl = ctrl || ctrlDown
+                if (!useCtrl && !alt) return false
                 val encoded = Vt100KeyEncoder.applyModifiers(
                     String(Character.toChars(codePoint)),
-                    ctrl = ctrl || ctrlDown,
+                    ctrl = useCtrl,
                     alt = alt,
                 )
                 session?.write(encoded)
@@ -242,7 +270,12 @@ fun TerminalScreen(
                 }
             }
             TextButton(
-                onClick = { stateHolder.setPhantomReport(engine.diagnosePhantomProcesses()) },
+                onClick = {
+                    // /proc scanning is file I/O: never on the Main thread.
+                    scope.launch(Dispatchers.IO) {
+                        stateHolder.setPhantomReport(engine.diagnosePhantomProcesses())
+                    }
+                },
                 modifier = Modifier.testTag("terminal_diagnose_phantom"),
             ) {
                 Text("Diag", fontFamily = FontFamily.Monospace)
@@ -261,7 +294,11 @@ fun TerminalScreen(
                 AndroidView(
                     factory = { ctx ->
                         TerminalView(ctx, null).apply {
-                            setTextSize(28)
+                            // Without focusable flags the view never
+                            // receives key input at all.
+                            isFocusable = true
+                            isFocusableInTouchMode = true
+                            setTextSize(textSizeState.value)
                             setTerminalViewClient(viewClient)
                             attachSession(termSession)
                             terminalViewRef = this
@@ -295,14 +332,34 @@ fun TerminalScreen(
                     ) {
                         Text("Start shell", fontFamily = FontFamily.Monospace)
                     }
-                    if (uiState.lastCommandOutput.isNotBlank()) {
-                        Text(
-                            text = uiState.lastCommandOutput,
-                            color = TerminalGreen,
-                            fontFamily = FontFamily.Monospace,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
+                }
+            }
+        }
+
+        // !cmd results stay visible while a PTY is live too: previously
+        // they were only rendered in the "Shell not started" branch, so a
+        // running shell hid every !cmd result.
+        if (uiState.lastCommandOutput.isNotBlank()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(TerminalSurface)
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(
+                    text = uiState.lastCommandOutput,
+                    color = TerminalGreen,
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.weight(1f).testTag("terminal_last_command_output"),
+                )
+                TextButton(
+                    onClick = { stateHolder.setLastCommandOutput("") },
+                    modifier = Modifier.testTag("terminal_clear_command_output"),
+                ) {
+                    Text("Clear", fontFamily = FontFamily.Monospace)
                 }
             }
         }

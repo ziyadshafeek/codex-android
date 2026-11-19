@@ -26,7 +26,10 @@ class MemoryStore(context: Context) {
         const val MAX_MESSAGES = 500
     }
 
-    private val dbHelper = CodexDatabase(context.applicationContext)
+    // One shared database: getInstance, never a second helper — a
+    // second CodexDatabase opens a second connection to the same file,
+    // and .use on its handle would close the singleton's database.
+    private val dbHelper = CodexDatabase.getInstance(context)
 
     /** Inserts a message row. Blank content is ignored, not stored. */
     suspend fun saveMessage(role: String, content: String) = withContext(Dispatchers.IO) {
@@ -37,7 +40,7 @@ class MemoryStore(context: Context) {
                 put("content", content)
                 put("created_at", System.currentTimeMillis())
             }
-            dbHelper.writableDatabase.use { db ->
+            dbHelper.writableDatabase.let { db ->
                 db.insert(CodexDatabase.TABLE_MESSAGES, null, values)
                 // Prune everything except the newest MAX_MESSAGES rows.
                 db.execSQL(
@@ -63,7 +66,7 @@ class MemoryStore(context: Context) {
         withContext(Dispatchers.IO) {
             try {
                 if (limit <= 0) return@withContext emptyList()
-                val rows = dbHelper.readableDatabase.use { db ->
+                val rows = dbHelper.readableDatabase.let { db ->
                     db.query(
                         CodexDatabase.TABLE_MESSAGES,
                         arrayOf("id", "role", "content", "created_at"),
@@ -85,7 +88,7 @@ class MemoryStore(context: Context) {
     /** Deletes all stored messages. Never throws. */
     suspend fun clearMessages() = withContext(Dispatchers.IO) {
         try {
-            dbHelper.writableDatabase.use { db ->
+            dbHelper.writableDatabase.let { db ->
                 db.delete(CodexDatabase.TABLE_MESSAGES, null, null)
             }
         } catch (e: Exception) {
@@ -109,7 +112,7 @@ class MemoryStore(context: Context) {
                     put("created_at", now)
                     put("updated_at", now)
                 }
-                dbHelper.writableDatabase.use { db ->
+                dbHelper.writableDatabase.let { db ->
                     db.insertWithOnConflict(
                         CodexDatabase.TABLE_FACTS,
                         null,
@@ -125,7 +128,7 @@ class MemoryStore(context: Context) {
     /** The fact stored under [key], or null when there is none / on error. */
     suspend fun getFact(key: String): Fact? = withContext(Dispatchers.IO) {
         try {
-            dbHelper.readableDatabase.use { db ->
+            dbHelper.readableDatabase.let { db ->
                 db.query(
                     CodexDatabase.TABLE_FACTS,
                     arrayOf("id", "key", "value", "source", "created_at", "updated_at"),
@@ -147,7 +150,7 @@ class MemoryStore(context: Context) {
     /** All facts, ordered by key. Empty list on error. */
     suspend fun allFacts(): List<Fact> = withContext(Dispatchers.IO) {
         try {
-            dbHelper.readableDatabase.use { db ->
+            dbHelper.readableDatabase.let { db ->
                 db.query(
                     CodexDatabase.TABLE_FACTS,
                     arrayOf("id", "key", "value", "source", "created_at", "updated_at"),
@@ -166,7 +169,7 @@ class MemoryStore(context: Context) {
     /** Deletes the fact stored under [key] (no-op when absent). Never throws. */
     suspend fun deleteFact(key: String) = withContext(Dispatchers.IO) {
         try {
-            dbHelper.writableDatabase.use { db ->
+            dbHelper.writableDatabase.let { db ->
                 db.delete(CodexDatabase.TABLE_FACTS, "key = ?", arrayOf(key))
             }
         } catch (e: Exception) {
@@ -187,7 +190,7 @@ class MemoryStore(context: Context) {
                 .replace("%", "\\%")
                 .replace("_", "\\_")
             val pattern = "%$escaped%"
-            dbHelper.readableDatabase.use { db ->
+            dbHelper.readableDatabase.let { db ->
                 db.query(
                     CodexDatabase.TABLE_FACTS,
                     arrayOf("id", "key", "value", "source", "created_at", "updated_at"),

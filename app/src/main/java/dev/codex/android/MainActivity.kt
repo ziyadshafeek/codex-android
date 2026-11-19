@@ -10,6 +10,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -83,6 +84,12 @@ class MainActivity : ComponentActivity() {
                     // created on the main thread and shared by the
                     // Preview tab and the agent's browser tools.
                     val browser = remember { VerificationBrowser(applicationContext) }
+                    // Release the browser's WebView when this composition
+                    // goes away (activity destroyed, or a configuration
+                    // change) — otherwise the old WebView leaks.
+                    DisposableEffect(browser) {
+                        onDispose { browser.destroy() }
+                    }
                     // Composition root for the workbench engines (M2/M4/M6):
                     // one workspace dir shared by the file tools, the
                     // context engine, the knowledge base and the hook

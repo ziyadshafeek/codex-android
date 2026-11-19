@@ -17,6 +17,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,6 +25,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
@@ -142,17 +144,24 @@ object AgentRuntime {
                     // (AgentRuntime.stop) cancels with no reason (or the
                     // generic "Job was cancelled"), so the default text is
                     // preserved for it.
-                    db.appendMessage(
-                        TimelineMessage(
-                            threadId = threadId,
-                            role = "system",
-                            kind = "text",
-                            content = e.message
-                                ?.takeIf { it.startsWith("Stopped: reached max step budget") }
-                                ?: "Stopped by user.",
+                    // The coroutine is cancelled here: plain suspend DB
+                    // calls would throw immediately and this cleanup would
+                    // never run (no "Stopped" record, thread stuck on
+                    // "running"). NonCancellable lets the record + idle
+                    // status land; the cancellation is rethrown after.
+                    withContext(NonCancellable) {
+                        db.appendMessage(
+                            TimelineMessage(
+                                threadId = threadId,
+                                role = "system",
+                                kind = "text",
+                                content = e.message
+                                    ?.takeIf { it.startsWith("Stopped: reached max step budget") }
+                                    ?: "Stopped by user.",
+                            )
                         )
-                    )
-                    db.updateThreadState(threadId, status = "idle")
+                        db.updateThreadState(threadId, status = "idle")
+                    }
                     throw e
                 } catch (e: Exception) {
                     db.appendMessage(
@@ -165,15 +174,25 @@ object AgentRuntime {
                     )
                     db.updateThreadState(threadId, status = "error", unread = true)
                 } finally {
-                    activeJobs.remove(threadId)
                     steerQueues.remove(threadId)?.close()
                     clearThreadApproval(appContext, threadId)
                     updateThread(threadId) {
                         it.copy(isRunning = false, statusText = "", streamingAssistantText = "", pendingApproval = null)
                     }
                     syncServiceNotification(appContext)
-                    if (activeJobs.isEmpty()) {
-                        CodexAgentService.stop(appContext)
+                    // The remove + isEmpty + stop must be atomic under the
+                    // same monitor startTurn registers under: otherwise a
+                    // turn that registers between the check and the stop
+                    // gets its foreground service stopped mid-run. Removal
+                    // happens last on purpose — until it runs, a new
+                    // startTurn for this thread correctly sees the old job
+                    // still registered and refuses, instead of starting
+                    // while this finally is still mutating thread state.
+                    synchronized(activeJobs) {
+                        activeJobs.remove(threadId)
+                        if (activeJobs.isEmpty()) {
+                            CodexAgentService.stop(appContext)
+                        }
                     }
                 }
             }

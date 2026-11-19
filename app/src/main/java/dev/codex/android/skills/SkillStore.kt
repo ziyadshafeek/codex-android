@@ -26,7 +26,8 @@ import kotlinx.serialization.encodeToString
  */
 class SkillStore(context: Context) {
 
-    private val database = CodexDatabase(context.applicationContext)
+    // One shared database: getInstance, never a second helper (see MemoryStore).
+    private val database = CodexDatabase.getInstance(context)
 
     /** Upserts [skill] by `id`. Never throws. */
     suspend fun save(skill: Skill) = withContext(Dispatchers.IO) {

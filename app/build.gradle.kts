@@ -33,7 +33,15 @@ android {
         // PRoot binaries are packaged as .so files so the package manager
         // extracts them to nativeLibraryDir with execute permission
         // (SELinux-compliant execve() on targetSdk >= 29).
-        jniLibs { useLegacyPackaging = true }
+        jniLibs {
+            useLegacyPackaging = true
+            // Keep the debug symbols of the PRoot binaries: AGP strips
+            // native debug symbols by default. This DSL block is the only
+            // place the option exists in AGP 8.7.3 — the variant API
+            // (androidComponents.onVariants { variant.packaging... }) has
+            // no such member (CI: "Unresolved reference: keepDebugSymbols").
+            keepDebugSymbols += "**/libproot*.so"
+        }
     }
 
     compileOptions {
