@@ -7,6 +7,8 @@ import dev.codex.android.core.CodexError
 import dev.codex.android.security.ApprovalGate
 import dev.codex.android.security.PendingAction
 import dev.codex.android.security.SensitivityPolicy
+import dev.codex.android.skills.Skill
+import dev.codex.android.skills.SkillRunner
 import dev.codex.android.tools.ToolRegistry
 import dev.codex.android.tools.parseToolCall
 import kotlinx.coroutines.CancellationException
@@ -30,7 +32,19 @@ class AgentLoop(
     private val gate: ApprovalGate,
     private val planStore: PlanStore,
     private val model: String,
+    private val skills: List<Skill> = emptyList(),
 ) {
+
+    /**
+     * The system prompt for this run: [SYSTEM_PROMPT], plus the enabled
+     * skills' instructions when any are present.
+     */
+    private val systemPrompt: String =
+        if (skills.isEmpty()) {
+            SYSTEM_PROMPT
+        } else {
+            SYSTEM_PROMPT + "\n\nAvailable skills:\n" + SkillRunner.buildSkillPrompt(skills)
+        }
 
     companion object {
         /** Hard cap on model turns per goal, so a run always terminates. */
@@ -63,7 +77,7 @@ class AgentLoop(
         events.emit(AgentEvent.PlanCreated(plan))
 
         val messages = mutableListOf(
-            ChatMessage(role = "system", content = SYSTEM_PROMPT),
+            ChatMessage(role = "system", content = systemPrompt),
             ChatMessage(role = "user", content = goal),
         )
         val toolDefinitions = tools.definitions()
