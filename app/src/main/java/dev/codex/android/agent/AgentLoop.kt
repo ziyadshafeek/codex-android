@@ -170,51 +170,11 @@ class AgentLoop(
                 return answer
             }
 
-            // Execute each requested tool call in order.
-            for (call in choice.toolCalls) {
-                val parsed = try {
-                    parseToolCall(call, tools)
-                } catch (e: CodexError.MalformedToolCall) {
-                    emitEvent(AgentEvent.Error(e))
-                    messages.add(
-                        ChatMessage(
-                            role = "tool",
-                            content = "Tool call failed: ${e.message}. Fix the call and try again, or answer without tools.",
-                            toolCallId = call.id,
-                            name = call.function.name,
-                        ),
-                    )
-                    continue
-                }
-                val toolName = parsed.tool.name
-                if (SensitivityPolicy.isForbidden(toolName)) {
-                    val denial = "Tool '$toolName' is never allowed."
-                    emitEvent(
-                        AgentEvent.Error(CodexError.ToolFailed(toolName, denial)),
-                    )
-                    messages.add(
-                        ChatMessage(
-                            role = "tool",
-                            content = denial,
-                            toolCallId = call.id,
-                            name = toolName,
-                        ),
-                    )
-                    continue
-                }
-                emitEvent(AgentEvent.ToolStarted(toolName))
-                val output = runToolWithGate(call, parsed, emitEvent)
-                val outputText = output ?: "(no output)"
-                emitEvent(AgentEvent.ToolFinished(toolName, outputText))
-                messages.add(
-                    ChatMessage(
-                        role = "tool",
-                        content = outputText,
-                        toolCallId = call.id,
-                        name = toolName,
-                    ),
-                )
-            }
+            // Execute the requested tool calls: consecutive read-only
+            // calls run in parallel (bounded), sensitive calls act as
+            // barriers. Results are reported back to the model strictly in
+            // the order the model requested them (see executeToolCalls).
+            executeToolCalls(choice.toolCalls, messages, emitEvent)
             // Loop: the model sees the tool results and decides the next step.
         }
 
@@ -228,6 +188,123 @@ class AgentLoop(
         emitEvent(AgentEvent.PlanUpdated(currentPlan))
         emitEvent(AgentEvent.Finished(answer))
         return answer
+    }
+
+    /**
+     * One requested tool call after the parse phase: either ready to run
+     * ([parsed] set) or an error to report to the model ([error] set).
+     * A plain data class, not a sealed hierarchy, so the parse phase stays
+     * a simple map.
+     */
+    private data class CallSlot(
+        val call: ToolCall,
+        val parsed: dev.codex.android.tools.ParsedToolCall?,
+        val error: CodexError?,
+        val errorText: String,
+        val errorToolName: String,
+    )
+
+    /**
+     * Executes one turn's tool calls with read-only batching (M1).
+     *
+     * Three phases, in order:
+     * 1. Parse (sequential, side-effect-free): every call is parsed and
+     *    checked against the forbidden list. Malformed or forbidden calls
+     *    become error slots — they never execute, but the model still sees
+     *    them, in place.
+     * 2. Batch: ready calls run through [ParallelToolRunner]. A call is
+     *    read-only when its tool never asks for approval
+     *    ([SensitivityPolicy.requiresApproval]); approval-gated tools are
+     *    barriers and run alone, in order — the gate allows at most one
+     *    pending approval, so two concurrent prompts would throw. Each
+     *    call's [AgentEvent.ToolStarted] fires inside its execute, just
+     *    before its gate/execution. A failing call's exception becomes
+     *    error text (the loop reports tool errors to the model and
+     *    continues); only [CancellationException] propagates and aborts
+     *    the run.
+     * 3. Finish walk (input order): every call is reported to the model
+     *    and narrated ([AgentEvent.ToolFinished] / [AgentEvent.Error]) in
+     *    exactly the order the model requested the calls, regardless of
+     *    which read finished first.
+     */
+    private suspend fun executeToolCalls(
+        calls: List<ToolCall>,
+        messages: MutableList<ChatMessage>,
+        emitEvent: suspend (AgentEvent) -> Unit,
+    ) {
+        val slots = calls.map { call ->
+            try {
+                val parsed = parseToolCall(call, tools)
+                if (SensitivityPolicy.isForbidden(parsed.tool.name)) {
+                    val denial = "Tool '${parsed.tool.name}' is never allowed."
+                    CallSlot(
+                        call = call,
+                        parsed = null,
+                        error = CodexError.ToolFailed(parsed.tool.name, denial),
+                        errorText = denial,
+                        errorToolName = parsed.tool.name,
+                    )
+                } else {
+                    CallSlot(call, parsed, null, "", parsed.tool.name)
+                }
+            } catch (e: CodexError.MalformedToolCall) {
+                CallSlot(
+                    call = call,
+                    parsed = null,
+                    error = e,
+                    errorText = "Tool call failed: ${e.message}. Fix the call and try again, or answer without tools.",
+                    errorToolName = call.function.name,
+                )
+            }
+        }
+
+        val queuedPairs = slots.mapIndexedNotNull { index, slot ->
+            val parsed = slot.parsed ?: return@mapIndexedNotNull null
+            index to QueuedCall<String?>(
+                toolCallId = slot.call.id,
+                isReadOnly = !SensitivityPolicy.requiresApproval(parsed.tool),
+            ) {
+                emitEvent(AgentEvent.ToolStarted(parsed.tool.name))
+                try {
+                    runToolWithGate(slot.call, parsed, emitEvent)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    "Tool '${parsed.tool.name}' failed: ${e.message}"
+                }
+            }
+        }
+        val outputs: List<String?> =
+            if (queuedPairs.isEmpty()) emptyList()
+            else ParallelToolRunner().runBatched(queuedPairs.map { it.second })
+        val outputBySlotIndex =
+            queuedPairs.map { it.first }.zip(outputs).toMap()
+
+        slots.forEachIndexed { index, slot ->
+            val parsed = slot.parsed
+            if (parsed == null) {
+                emitEvent(AgentEvent.Error(slot.error ?: CodexError.Unknown(slot.errorText)))
+                messages.add(
+                    ChatMessage(
+                        role = "tool",
+                        content = slot.errorText,
+                        toolCallId = slot.call.id,
+                        name = slot.errorToolName,
+                    ),
+                )
+            } else {
+                val outputText = outputBySlotIndex[index] ?: "(no output)"
+                emitEvent(AgentEvent.ToolFinished(parsed.tool.name, outputText))
+                messages.add(
+                    ChatMessage(
+                        role = "tool",
+                        content = outputText,
+                        toolCallId = slot.call.id,
+                        name = parsed.tool.name,
+                    ),
+                )
+            }
+        }
     }
 
     /**
