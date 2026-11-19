@@ -243,11 +243,15 @@ class ChatSettingsTest {
         // value can never be shown as text).
         composeTestRule.onAllNodesWithText(FAKE_KEY).assertCountEquals(0)
         // Stronger check on the field itself: its editable text is empty.
-        val editableText = composeTestRule.onNodeWithTag("settings_api_key")
+        // (SemanticsConfiguration has no getOrNull in this Compose version,
+        // so check contains() first, then read with the operator get.)
+        val semanticsNode = composeTestRule.onNodeWithTag("settings_api_key")
             .fetchSemanticsNode()
-            .config
-            .getOrNull(SemanticsProperties.EditableText)
-            ?.text
+        val editableText = if (SemanticsProperties.EditableText in semanticsNode.config) {
+            semanticsNode.config[SemanticsProperties.EditableText].text
+        } else {
+            null
+        }
         assertEquals("", editableText)
 
         // Leave the device clean: remove the fake key again.
