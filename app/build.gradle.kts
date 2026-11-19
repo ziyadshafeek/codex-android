@@ -80,6 +80,11 @@ dependencies {
     // Kotlin 1.9.25; 1.7.3 requires Kotlin 2.0.0+ (CI run 44345429591).
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    // Rosemoe Sora Editor (LGPL-2.1) — unmodified Maven Central AAR, never
+    // vendored in source. Used by editor/SoraEditorScreen.kt (CodeEditor,
+    // SchemeDarcula, EditorSearcher). No new repository needed: Maven Central
+    // is a default repository.
+    implementation("io.github.rosemoe.sora:editor:0.24.3")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("androidx.work:work-runtime-ktx:2.9.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
