@@ -84,7 +84,14 @@ dependencies {
     // vendored in source. Used by editor/SoraEditorScreen.kt (CodeEditor,
     // SchemeDarcula, EditorSearcher). No new repository needed: Maven Central
     // is a default repository.
-    implementation("io.github.rosemoe.sora:editor:0.24.3")
+    // Coordinate correction (CI run 44627663684): the staged
+    // io.github.rosemoe.sora:editor:0.24.3 does not exist — Maven Central has
+    // no group io.github.rosemoe.sora at all, and no 0.24.3 anywhere. The
+    // real group is io.github.Rosemoe.sora-editor (capital R) and 0.23.6 is
+    // the newest version on Central (verified via search.maven.org
+    // 2026-11-19). The Java package inside the AAR is still
+    // io.github.rosemoe.sora.*, so SoraEditorScreen.kt imports are unchanged.
+    implementation("io.github.Rosemoe.sora-editor:editor:0.23.6")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("androidx.work:work-runtime-ktx:2.9.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
