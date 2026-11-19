@@ -16,7 +16,6 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
-import androidx.test.espresso.Espresso
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.codex.android.data.KeyStore
@@ -214,12 +213,13 @@ class ChatSettingsTest {
         val goal = "Test goal with no key"
         composeTestRule.onNodeWithTag("chat_input")
             .performTextInput(goal)
-        // Close the soft keyboard first: on the emulator it can cover
-        // the send button and make the click flaky. Then assert the
-        // send button is enabled before clicking, so a missed input
-        // fails here with a clear error instead of a generic 10 s
-        // timeout waiting for the no-key message below.
-        Espresso.closeSoftKeyboard()
+        // Assert the send button is enabled before clicking, so a missed
+        // input fails here with a clear error instead of a generic 10 s
+        // timeout waiting for the no-key message below. (Do NOT use
+        // Espresso.closeSoftKeyboard() here: it waits for a focused root
+        // view and throws RootViewWithoutFocusException on this emulator;
+        // CI also enables the hardware keyboard, so no soft keyboard
+        // opens in the first place.)
         composeTestRule.onNodeWithTag("chat_send").assertIsEnabled()
         composeTestRule.onNodeWithTag("chat_send").performClick()
 
