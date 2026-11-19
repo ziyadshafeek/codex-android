@@ -25,7 +25,7 @@ class ParallelToolRunnerTest {
 
     @Test
     fun emptyBatch_returnsEmptyList() = runBlocking {
-        assertEquals(emptyList<String>(), runner.runBatched(emptyList()))
+        assertEquals(emptyList<String>(), runner.runBatched<String>(emptyList()))
     }
 
     @Test
@@ -189,7 +189,7 @@ class ParallelToolRunnerTest {
         val afterStarted = AtomicInteger(0)
         val calls = listOf(
             QueuedCall("slow", isReadOnly = true) { delay(200); "slow" },
-            QueuedCall("boom", isReadOnly = true) {
+            QueuedCall<String>("boom", isReadOnly = true) {
                 throw IllegalStateException("boom")
             },
             QueuedCall("write", isReadOnly = false) {
