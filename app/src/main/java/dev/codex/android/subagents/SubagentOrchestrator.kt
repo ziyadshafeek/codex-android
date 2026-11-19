@@ -607,6 +607,12 @@ class SubagentOrchestrator private constructor(
         } else {
             "Subagent task: $task"
         }
+        // Publish the info BEFORE launching the job: the job's first
+        // updateInfo() (e.g. the start-refused -> failed path) must find
+        // the row, or a fast failure is lost and the subagent reads
+        // "running" forever. (CI caught this race: the launched job won
+        // the scheduling race and updated a list the row had not joined.)
+        _subagents.value = _subagents.value + info
         val job = scope.launch {
             var threadId: String? = null
             try {
@@ -659,7 +665,6 @@ class SubagentOrchestrator private constructor(
             }
         }
         jobs[id] = job
-        _subagents.value = _subagents.value + info
         return info
     }
 
