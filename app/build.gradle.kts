@@ -35,13 +35,6 @@ android {
         // (SELinux-compliant execve() on targetSdk >= 29).
         jniLibs { useLegacyPackaging = true }
     }
-    androidComponents {
-        onVariants { variant ->
-            // Keep debug symbols for the PRoot native binaries.
-            // (No libbusybox.so: there is no host-side BusyBox artifact in H2.)
-            variant.packaging.keepDebugSymbols += listOf("**/libproot*.so")
-        }
-    }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -55,6 +48,14 @@ android {
     }
     composeOptions {
         kotlinCompilerExtensionVersion = "1.5.15"
+    }
+}
+
+// Keep debug symbols for the PRoot native binaries (top-level: the
+// androidComponents extension is not available inside the android {} block).
+androidComponents {
+    onVariants { variant ->
+        variant.packaging.keepDebugSymbols.add("**/libproot*.so")
     }
 }
 
