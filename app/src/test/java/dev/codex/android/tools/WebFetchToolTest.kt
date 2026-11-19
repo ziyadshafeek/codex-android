@@ -298,9 +298,11 @@ class WebFetchToolTest {
         assertFalse(cut199.contains('\uFFFD'))
 
         // Emoji is 4 UTF-8 bytes; cutting 1 byte into it must step back.
+        // (One emoji is 2 UTF-16 units, so 9 emojis measure length 18.)
         val fourByte = "😀".repeat(10) // 40 bytes
         val cut39 = WebFetchTool.truncateUtf8Bytes(fourByte, 39)
-        assertEquals(9, cut39.length)
+        assertEquals(9, cut39.codePointCount(0, cut39.length))
+        assertEquals(18, cut39.length)
         assertEquals(36, cut39.toByteArray(Charsets.UTF_8).size)
         assertFalse(cut39.contains('\uFFFD'))
 
