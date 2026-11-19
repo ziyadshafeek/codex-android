@@ -463,17 +463,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      * events carry one full turn's text each — streamingAssistantText
      * therefore grows per model turn, not per token.
      */
-/**
- * True when a Finished answer should be appended as a new bubble: false
- * when the same text is already the last assistant message (AgentLoop
- * emits the final turn's text as both AssistantText and Finished).
- * Pure helper, JVM-testable: see ChatFinishedDedupeTest.
- */
-internal fun shouldAppendFinished(messages: List<ChatUiMessage>, answer: String): Boolean {
-    val lastAssistant = messages.lastOrNull { it.role == "assistant" && !it.isError }
-    return lastAssistant?.text != answer
-}
-
     private suspend fun runAgentTurn(
         turn: AgentRuntime.TurnContext,
         threadId: String,
@@ -727,6 +716,18 @@ private suspend fun recordAuditQuietly(
  * which publishes the pending action for the in-app dialog and suspends
  * until the runner bridge answers it.
  */
+/**
+ * True when a Finished answer should be appended as a new bubble: false
+ * when the same text is already the last assistant message (AgentLoop
+ * emits the final turn's text as both AssistantText and Finished).
+ * Top-level (not a ChatViewModel member) so JVM tests can call it
+ * directly: see ChatFinishedDedupeTest.
+ */
+internal fun shouldAppendFinished(messages: List<ChatUiMessage>, answer: String): Boolean {
+    val lastAssistant = messages.lastOrNull { it.role == "assistant" && !it.isError }
+    return lastAssistant?.text != answer
+}
+
 private class PolicyApprovalGate(
     private val realGate: ApprovalGate,
     private val threadId: String,
