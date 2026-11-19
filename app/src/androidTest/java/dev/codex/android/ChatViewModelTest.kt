@@ -3,6 +3,7 @@ package dev.codex.android
 import android.app.Application
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import dev.codex.android.agent.PlanStore
 import dev.codex.android.data.KeyStore
 import dev.codex.android.data.MemoryStore
 import dev.codex.android.ui.ChatViewModel
@@ -29,7 +30,12 @@ import org.junit.runner.RunWith
  *
  * Teardown mirrors ChatSettingsTest: clear stored messages (the run saves
  * the user goal) and reset the KeyStore, so no trace leaks into the next
- * test class in this instrumentation run.
+ * test class in this instrumentation run. It ALSO clears the saved plan:
+ * a real AgentLoop run saves codex_latest_plan.json, and the next
+ * ChatViewModel would otherwise append "Resumed plan: …" on launch,
+ * hiding the empty state that OnboardingHistoryStoreTest and SmokeTest
+ * assert on. This test is the first ever to run a real loop, so it is the
+ * first to leave a plan behind.
  */
 @RunWith(AndroidJUnit4::class)
 class ChatViewModelTest {
@@ -58,6 +64,7 @@ class ChatViewModelTest {
             keyStore.setBaseUrl("")
             keyStore.setModel("")
             val memoryStore = MemoryStore(context)
+            PlanStore(context).clear()
             var emptied = false
             for (attempt in 1..5) {
                 memoryStore.clearMessages()
