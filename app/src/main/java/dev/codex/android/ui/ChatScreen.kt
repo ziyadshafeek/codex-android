@@ -33,7 +33,11 @@ import androidx.compose.ui.unit.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ChatScreen(viewModel: ChatViewModel, onOpenSettings: () -> Unit) {
+fun ChatScreen(
+    viewModel: ChatViewModel,
+    onOpenSettings: () -> Unit,
+    onOpenHistory: () -> Unit,
+) {
     val messages by viewModel.messages.collectAsState()
     val isRunning by viewModel.isRunning.collectAsState()
     val hasKey by viewModel.hasKey.collectAsState()
@@ -52,6 +56,9 @@ fun ChatScreen(viewModel: ChatViewModel, onOpenSettings: () -> Unit) {
             TopAppBar(
                 title = { Text("Codex") },
                 actions = {
+                    TextButton(onClick = onOpenHistory) {
+                        Text("History")
+                    }
                     TextButton(onClick = onOpenSettings) {
                         Text("Settings")
                     }
@@ -64,6 +71,33 @@ fun ChatScreen(viewModel: ChatViewModel, onOpenSettings: () -> Unit) {
                 .fillMaxSize()
                 .padding(padding)
         ) {
+            if (messages.isEmpty()) {
+                // Empty state: example prompts fill the input, never send.
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "What should Codex do?",
+                            style = MaterialTheme.typography.titleMedium,
+                            textAlign = TextAlign.Center
+                        )
+                        TextButton(onClick = { text = "What time is it?" }) {
+                            Text("What time is it?")
+                        }
+                        TextButton(onClick = { text = "Summarise what's on my screen" }) {
+                            Text("Summarise what's on my screen")
+                        }
+                        TextButton(onClick = { text = "Open the clock app" }) {
+                            Text("Open the clock app")
+                        }
+                    }
+                }
+            } else {
             LazyColumn(
                 state = listState,
                 modifier = Modifier
@@ -72,6 +106,7 @@ fun ChatScreen(viewModel: ChatViewModel, onOpenSettings: () -> Unit) {
                     .padding(horizontal = 12.dp)
             ) {
                 items(messages) { message ->
+                    val displayText = if (message.isError) "⚠ ${message.text}" else message.text
                     when (message.role) {
                         "user" -> {
                             Box(
@@ -85,7 +120,7 @@ fun ChatScreen(viewModel: ChatViewModel, onOpenSettings: () -> Unit) {
                                     shape = RoundedCornerShape(12.dp)
                                 ) {
                                     Text(
-                                        text = message.text,
+                                        text = displayText,
                                         modifier = Modifier.padding(12.dp),
                                         color = if (message.isError) MaterialTheme.colorScheme.error
                                         else MaterialTheme.colorScheme.onPrimaryContainer
@@ -95,7 +130,7 @@ fun ChatScreen(viewModel: ChatViewModel, onOpenSettings: () -> Unit) {
                         }
                         "assistant" -> {
                             Text(
-                                text = message.text,
+                                text = displayText,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(vertical = 4.dp),
@@ -105,7 +140,7 @@ fun ChatScreen(viewModel: ChatViewModel, onOpenSettings: () -> Unit) {
                         }
                         else -> {
                             Text(
-                                text = message.text,
+                                text = displayText,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(vertical = 4.dp),
@@ -118,6 +153,7 @@ fun ChatScreen(viewModel: ChatViewModel, onOpenSettings: () -> Unit) {
                     }
                 }
             }
+            } // end else (messages non-empty)
             if (!hasKey) {
                 Text(
                     text = "No API endpoint or key set — open Settings to add yours.",

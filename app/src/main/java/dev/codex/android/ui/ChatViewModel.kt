@@ -27,6 +27,9 @@ import kotlinx.coroutines.withContext
 data class ChatUiMessage(val role: String, val text: String, val isError: Boolean = false)
 // roles: "user", "assistant", "system"
 
+/** One past user goal for the History screen. */
+data class HistoryEntry(val text: String, val createdAtMillis: Long)
+
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     val keyStore: KeyStore = KeyStore(application)
@@ -46,6 +49,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _hasKey = MutableStateFlow(false)
     val hasKey: StateFlow<Boolean> = _hasKey.asStateFlow()
 
+    private val _history = MutableStateFlow<List<HistoryEntry>>(emptyList())
+    val history: StateFlow<List<HistoryEntry>> = _history.asStateFlow()
+
     init {
         refreshKeyState()
         viewModelScope.launch {
@@ -63,9 +69,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 skillStore.seedBuiltins()
-                val recent = memoryStore.recentMessages(20)
-                if (recent.isNotEmpty()) {
-                    val restored = recent.map { stored ->
+                val recent = memoryStore.recentMessages(100)
+                // History: distinct user goals, latest occurrence kept,
+                // newest first, capped at 50.
+                _history.value = recent
+                    .filter { it.role == "user" }
+                    .sortedByDescending { it.createdAtMillis }
+                    .distinctBy { it.text }
+                    .take(50)
+                    .map { HistoryEntry(it.text, it.createdAtMillis) }
+                // Chat restore keeps its old behaviour: newest 20 only.
+                val restore = recent.takeLast(20)
+                if (restore.isNotEmpty()) {
+                    val restored = restore.map { stored ->
                         val role = when (stored.role) {
                             "user" -> "user"
                             "assistant" -> "assistant"

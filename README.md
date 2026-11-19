@@ -39,3 +39,18 @@ The current package id is `dev.codex.android` — **provisional**. Ziyad has not
 ## Licence
 
 Apache License 2.0 — see [LICENSE](LICENSE).
+
+## Low-end device profile
+
+The target is phones with 3–4 GB RAM, 8 cores or fewer, Android 8+ (minSdk 26) — e.g. the developer's own NARZO 70 Pro 5G class of device and cheaper. The app is built to stay light on such phones:
+
+- **No on-device LLM** — all reasoning happens through the user's own OpenAI-compatible API (the API brain); the phone only runs a lightweight Kotlin runtime.
+- **SQLite, no Room** — on-device memory is plain SQLite, with no heavy ORM overhead.
+- **Bounded work everywhere** — node walks are capped at 500 nodes, screen text at 4000 chars, and stored message history at 500 rows, so no single operation can balloon memory on a constrained phone.
+- **Capped message history** — the chat restores at most 20 recent messages on launch (10 on low-RAM devices, via `PerformancePolicy.historyLimit`).
+- **Adaptive resurrection interval** — the periodic resurrection worker re-arms alarms every 12 hours on low-RAM devices and every 6 hours otherwise (`DeviceProfile` + `PerformancePolicy.resurrectionIntervalHours`), so low-end phones wake less often and save battery.
+- **3s operation timeouts** — operations time out quickly instead of hanging a slow phone.
+
+Device detection (`dev.codex.android.util.DeviceProfile`) uses `ActivityManager.isLowRamDevice` and total RAM: LOW when the OS flags low-RAM or total RAM is under 4 GB, HIGH when RAM is 8 GB+ and there are 8+ cores, otherwise MEDIUM. Detection never crashes — any failure degrades to MEDIUM. The agent loop's turn budget is likewise scaled by device class in `PerformancePolicy.maxTurns` (8 on LOW, 12 otherwise), as the documented default for a future wiring; the loop currently still hardcodes 12.
+
+**Not yet verified on a low-end device:** kill-and-resume, exact-alarm delivery, and tap/scroll timing on a real low-end phone. These have not been tested on real low-end hardware — stated plainly, not assumed.
