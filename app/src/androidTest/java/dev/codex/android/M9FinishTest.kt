@@ -1,6 +1,7 @@
 package dev.codex.android
 
 import android.app.Application
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
@@ -95,7 +96,7 @@ class M9FinishTest {
         }
         composeTestRule.onNodeWithTag("settings_help").performClick()
         composeTestRule.waitUntil(timeoutMillis = 15_000) {
-            composeTestRule.onAllNodesWithText("Your key").fetchSemanticsNodes().isNotEmpty()
+            composeTestRule.onAllNodes(hasText("Your key")).fetchSemanticsNodes().isNotEmpty()
         }
         composeTestRule.onNodeWithText("Your key").assertExists()
         composeTestRule.onNodeWithText("Back").performClick()
