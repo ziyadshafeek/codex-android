@@ -40,6 +40,14 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <!-- Step 3 (v0.8.0): notification Approve/Deny receiver for
+             AgentRuntime approvals. Not exported: only the app's own
+             PendingIntents (from AgentRuntime's approval notification)
+             send to it. -->
+        <receiver
+            android:name=".agent.ApprovalActionReceiver"
+            android:exported="false" />
+
         <!-- Phase 4: boot receiver for resurrection after reboot.
              Enabled in v0.4.0. Exported: the system sends BOOT_COMPLETED. -->
         <receiver
