@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Milestone M10 (H6): Auto Backup exclusions (pre-API-31 path; see also
+     data_extraction_rules.xml for API 31+). Referenced from AndroidManifest.xml
+     via android:fullBackupContent="@xml/backup_rules".
+     Every path below was verified against the repo / staged H1–H6 sources
+     2026-11-20 (see NOTES.md). -->
+<full-backup-content>
+    <!-- Room databases: memory/plans/threads + cost telemetry -->
+    <exclude domain="database" path="codex.db" />
+    <exclude domain="database" path="codex.db-wal" />
+    <exclude domain="database" path="codex.db-shm" />
+    <exclude domain="database" path="codex_cost.db" />
+    <exclude domain="database" path="codex_cost.db-wal" />
+    <exclude domain="database" path="codex_cost.db-shm" />
+    <!-- Shadow-git snapshot blobs: filesDir/snapshots/<workspace>/ -->
+    <exclude domain="file" path="snapshots/" />
+    <!-- Knowledge base markdown: filesDir/knowledge/<workspace>/kb_*.md -->
+    <exclude domain="file" path="knowledge/" />
+    <!-- Per-boot daemon Bearer token: filesDir/bin/daemon.env (0600) -->
+    <exclude domain="file" path="bin/daemon.env" />
+    <!-- EncryptedSharedPreferences (keys + BYOK tokens, incl. encrypted
+         keyset): KeyStore.PREFS_FILE = "codex_keys" (+ "_fallback" variant).
+         The AndroidKeyStore master key itself is never part of app backup. -->
+    <exclude domain="sharedpref" path="codex_keys.xml" />
+    <exclude domain="sharedpref" path="codex_keys_fallback.xml" />
+</full-backup-content>

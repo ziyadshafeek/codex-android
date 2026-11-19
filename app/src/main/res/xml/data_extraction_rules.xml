@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Milestone M10 (H6): data-extraction rules (API 31+). Referenced from
+     AndroidManifest.xml via android:dataExtractionRules="@xml/data_extraction_rules".
+     Same exclusions as backup_rules.xml, applied to BOTH cloud backup and
+     device-to-device transfer — android:allowBackup="false" disables cloud
+     backup, but the device-transfer section is what keeps secrets out of a
+     D2D migration. Every path below was verified against the repo / staged
+     H1–H6 sources 2026-11-20 (see NOTES.md). -->
+<data-extraction-rules>
+    <cloud-backup>
+        <!-- Room databases: memory/plans/threads + cost telemetry -->
+        <exclude domain="database" path="codex.db" />
+        <exclude domain="database" path="codex.db-wal" />
+        <exclude domain="database" path="codex.db-shm" />
+        <exclude domain="database" path="codex_cost.db" />
+        <exclude domain="database" path="codex_cost.db-wal" />
+        <exclude domain="database" path="codex_cost.db-shm" />
+        <!-- Shadow-git snapshot blobs: filesDir/snapshots/<workspace>/ -->
+        <exclude domain="file" path="snapshots/" />
+        <!-- Knowledge base markdown: filesDir/knowledge/<workspace>/kb_*.md -->
+        <exclude domain="file" path="knowledge/" />
+        <!-- Per-boot daemon Bearer token: filesDir/bin/daemon.env (0600) -->
+        <exclude domain="file" path="bin/daemon.env" />
+        <!-- EncryptedSharedPreferences (keys + BYOK tokens, incl. encrypted
+             keyset): KeyStore.PREFS_FILE = "codex_keys" (+ "_fallback" variant). -->
+        <exclude domain="sharedpref" path="codex_keys.xml" />
+        <exclude domain="sharedpref" path="codex_keys_fallback.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="database" path="codex.db" />
+        <exclude domain="database" path="codex.db-wal" />
+        <exclude domain="database" path="codex.db-shm" />
+        <exclude domain="database" path="codex_cost.db" />
+        <exclude domain="database" path="codex_cost.db-wal" />
+        <exclude domain="database" path="codex_cost.db-shm" />
+        <exclude domain="file" path="snapshots/" />
+        <exclude domain="file" path="knowledge/" />
+        <exclude domain="file" path="bin/daemon.env" />
+        <exclude domain="sharedpref" path="codex_keys.xml" />
+        <exclude domain="sharedpref" path="codex_keys_fallback.xml" />
+    </device-transfer>
+</data-extraction-rules>

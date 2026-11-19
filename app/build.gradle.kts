@@ -69,6 +69,9 @@ dependencies {
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
+    // H6 (M10): Desktop Workstation window-size classes. BOM-managed —
+    // no version here; the Compose BOM 2024.09.00 pins 1.3.0.
+    implementation("androidx.compose.material3:material3-window-size-class")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     // Termux terminal emulator + view (Apache-2.0) via JitPack (see settings.gradle.kts).
     // Modules built from the termux-app v0.118.1 tag.
