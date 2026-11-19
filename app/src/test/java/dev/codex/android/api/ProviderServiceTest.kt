@@ -1,0 +1,203 @@
+package dev.codex.android.api
+
+import kotlinx.coroutines.runBlocking
+import okhttp3.Interceptor
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import java.io.IOException
+
+/**
+ * JVM unit tests for [ProviderService].
+ *
+ * No real network, no real API key: every HTTP call is answered by a fake
+ * [Interceptor] returning canned JSON (or throwing [IOException] to simulate
+ * a dead host). Suspended calls are driven with plain [runBlocking], matching
+ * the existing test convention (see ApprovalGateTest).
+ */
+class ProviderServiceTest {
+
+    private val jsonMediaType = "application/json".toMediaType()
+
+    private fun fakeClient(
+        code: Int,
+        body: String,
+    ): OkHttpClient = OkHttpClient.Builder()
+        .addInterceptor(
+            Interceptor { chain ->
+                Response.Builder()
+                    .request(chain.request())
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(code)
+                    .message("fake")
+                    .body(body.toResponseBody(jsonMediaType))
+                    .build()
+            },
+        )
+        .build()
+
+    private fun throwingClient(message: String): OkHttpClient = OkHttpClient.Builder()
+        .addInterceptor(
+            Interceptor { throw IOException(message) },
+        )
+        .build()
+
+    // --- normalizeBaseUrl ---
+
+    @Test
+    fun normalizeBaseUrl_trailingSlashesRemoved() {
+        val service = ProviderService()
+        assertEquals(
+            "https://api.example.com/v1",
+            service.normalizeBaseUrl("https://api.example.com/v1///"),
+        )
+    }
+
+    @Test
+    fun normalizeBaseUrl_chatCompletionsSuffixRemoved() {
+        val service = ProviderService()
+        assertEquals(
+            "https://api.example.com/v1",
+            service.normalizeBaseUrl("https://api.example.com/v1/chat/completions"),
+        )
+        assertEquals(
+            "https://api.example.com/v1",
+            service.normalizeBaseUrl("https://api.example.com/v1/chat/completions/"),
+        )
+    }
+
+    @Test
+    fun normalizeBaseUrl_v1SuffixPreserved() {
+        // /v1 must stay: the models endpoint lives under it
+        // (https://api.openai.com/v1/models). Stripping it would 404.
+        val service = ProviderService()
+        assertEquals(
+            "https://api.openai.com/v1",
+            service.normalizeBaseUrl("https://api.openai.com/v1"),
+        )
+    }
+
+    @Test
+    fun normalizeBaseUrl_alreadyCleanUnchanged() {
+        val service = ProviderService()
+        assertEquals(
+            "https://api.example.com/v1",
+            service.normalizeBaseUrl("  https://api.example.com/v1  "),
+        )
+    }
+
+    // --- parseModelIds via testAndFetchModels (OpenAI + Ollama shapes) ---
+
+    @Test
+    fun testConnection_openAiShape_returnsSortedDistinctIds() = runBlocking {
+        val body = """{"object":"list","data":[
+            {"id":"gpt-4o","object":"model"},
+            {"id":"gpt-4o-mini","object":"model"},
+            {"id":"gpt-4o","object":"model"}
+        ]}"""
+        val service = ProviderService(fakeClient(200, body))
+        val result = service.testAndFetchModels("https://api.example.com/v1", "fake-key")
+
+        assertTrue("expected Success, got $result", result is ConnectionTestResult.Success)
+        val success = result as ConnectionTestResult.Success
+        assertEquals(listOf("gpt-4o", "gpt-4o-mini"), success.modelIds)
+        assertTrue("latency must be non-negative", success.latencyMs >= 0)
+    }
+
+    @Test
+    fun testConnection_ollamaShape_returnsSortedDistinctNames() = runBlocking {
+        val body = """{"models":[
+            {"name":"llama3.1:latest"},
+            {"name":"mistral:7b"},
+            {"name":"llama3.1:latest"}
+        ]}"""
+        val service = ProviderService(fakeClient(200, body))
+        val result = service.testAndFetchModels("http://localhost:11434/api", "fake-key")
+
+        assertTrue("expected Success, got $result", result is ConnectionTestResult.Success)
+        assertEquals(
+            listOf("llama3.1:latest", "mistral:7b"),
+            (result as ConnectionTestResult.Success).modelIds,
+        )
+    }
+
+    @Test
+    fun testConnection_emptyData_returnsEmptyList() = runBlocking {
+        val service = ProviderService(fakeClient(200, """{"data":[]}"""))
+        val result = service.testAndFetchModels("https://api.example.com/v1", "fake-key")
+
+        assertTrue("expected Success, got $result", result is ConnectionTestResult.Success)
+        assertEquals(emptyList<String>(), (result as ConnectionTestResult.Success).modelIds)
+    }
+
+    @Test
+    fun testConnection_alias_delegatesToTestAndFetchModels() = runBlocking {
+        val body = """{"data":[{"id":"model-a"}]}"""
+        val service = ProviderService(fakeClient(200, body))
+        val result = service.testConnection("https://api.example.com/v1", "fake-key")
+
+        assertTrue("expected Success, got $result", result is ConnectionTestResult.Success)
+        assertEquals(listOf("model-a"), (result as ConnectionTestResult.Success).modelIds)
+    }
+
+    // --- HTTP error mapping ---
+
+    @Test
+    fun testConnection_401_returnsAuthError() = runBlocking {
+        val service = ProviderService(fakeClient(401, """{"error":{"message":"bad key"}}"""))
+        val result = service.testAndFetchModels("https://api.example.com/v1", "wrong-key")
+
+        assertTrue("expected AuthError, got $result", result is ConnectionTestResult.AuthError)
+        assertEquals(401, (result as ConnectionTestResult.AuthError).httpCode)
+    }
+
+    @Test
+    fun testConnection_403_returnsAuthError() = runBlocking {
+        val service = ProviderService(fakeClient(403, """{"error":{"message":"forbidden"}}"""))
+        val result = service.testAndFetchModels("https://api.example.com/v1", "wrong-key")
+
+        assertTrue("expected AuthError, got $result", result is ConnectionTestResult.AuthError)
+        assertEquals(403, (result as ConnectionTestResult.AuthError).httpCode)
+    }
+
+    @Test
+    fun testConnection_404_returnsEndpointError() = runBlocking {
+        val service = ProviderService(fakeClient(404, "not found"))
+        val result = service.testAndFetchModels("https://api.example.com/wrong", "fake-key")
+
+        assertTrue("expected EndpointError, got $result", result is ConnectionTestResult.EndpointError)
+        assertEquals(404, (result as ConnectionTestResult.EndpointError).httpCode)
+    }
+
+    @Test
+    fun testConnection_ioException_returnsNetworkError() = runBlocking {
+        val service = ProviderService(throwingClient("Unable to resolve host"))
+        val result = service.testAndFetchModels("https://bad-host.invalid/v1", "fake-key")
+
+        assertTrue("expected NetworkError, got $result", result is ConnectionTestResult.NetworkError)
+        assertEquals("Unable to resolve host", (result as ConnectionTestResult.NetworkError).message)
+    }
+
+    @Test
+    fun testConnection_blankBaseUrl_returnsEndpointError() = runBlocking {
+        val service = ProviderService(fakeClient(200, """{"data":[]}"""))
+        val result = service.testAndFetchModels("   ", "fake-key")
+
+        assertTrue("expected EndpointError, got $result", result is ConnectionTestResult.EndpointError)
+        assertEquals(0, (result as ConnectionTestResult.EndpointError).httpCode)
+    }
+
+    @Test
+    fun testConnection_nonHttpScheme_returnsEndpointError() = runBlocking {
+        val service = ProviderService(fakeClient(200, """{"data":[]}"""))
+        val result = service.testAndFetchModels("ftp://api.example.com/v1", "fake-key")
+
+        assertTrue("expected EndpointError, got $result", result is ConnectionTestResult.EndpointError)
+        assertEquals(0, (result as ConnectionTestResult.EndpointError).httpCode)
+    }
+}
