@@ -19,6 +19,9 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
       # NOTE: do NOT use android-actions/setup-android — its v3 default runs
       # `sdkmanager tools`, and Google removed the legacy `tools` package,
       # so that step fails with exit 1. ubuntu-latest runners already ship
@@ -54,6 +57,9 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
       # Same SDK packages as the build job; the emulator runner installs
       # the API 34 x86_64 system image itself.
       - name: Install Android SDK packages
@@ -78,6 +84,8 @@ jobs:
           api-level: 34
           arch: x86_64
           target: google_apis
+          profile: pixel_6
+          enable-hw-keyboard: true
           disable-animations: true
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           script: ./gradlew connectedDebugAndroidTest --no-daemon

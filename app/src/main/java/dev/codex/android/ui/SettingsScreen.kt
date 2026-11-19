@@ -88,21 +88,21 @@ fun SettingsScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
         ) {
             OutlinedTextField(
                 value = baseUrl,
-                onValueChange = { baseUrl = it },
+                onValueChange = { baseUrl = it; saved = false },
                 label = { Text("Base URL") },
                 modifier = Modifier.fillMaxWidth().testTag("settings_base_url")
             )
             Spacer(modifier = Modifier.height(12.dp))
             OutlinedTextField(
                 value = model,
-                onValueChange = { model = it },
+                onValueChange = { model = it; saved = false },
                 label = { Text("Model") },
                 modifier = Modifier.fillMaxWidth().testTag("settings_model")
             )
             Spacer(modifier = Modifier.height(12.dp))
             OutlinedTextField(
                 value = apiKey,
-                onValueChange = { apiKey = it },
+                onValueChange = { apiKey = it; saved = false },
                 label = { Text("API key") },
                 placeholder = { Text("Paste your key here") },
                 visualTransformation = PasswordVisualTransformation(),
@@ -115,6 +115,7 @@ fun SettingsScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
                     keyStore.setModel(model)
                     if (apiKey.isNotBlank()) {
                         keyStore.setApiKey(apiKey)
+                        apiKey = ""
                     }
                     viewModel.refreshKeyState()
                     saved = true

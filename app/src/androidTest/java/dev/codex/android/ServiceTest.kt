@@ -7,6 +7,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import dev.codex.android.service.BatteryHelper
 import dev.codex.android.service.CodexAccessibilityService
 import dev.codex.android.service.CodexAgentService
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -27,6 +28,26 @@ class ServiceTest {
 
     private val context: Context
         get() = InstrumentationRegistry.getInstrumentation().targetContext
+
+    /**
+     * Always leave the service stopped: stop, then poll until the
+     * instance is gone (up to 10 s). A test must never exit with a live
+     * or stopping ServiceRecord behind it — on a slow device a
+     * still-pending start could otherwise race the next test class and
+     * crash the process with ForegroundServiceDidNotStartInTimeException.
+     * If a stop was deferred (requested while the start was still in
+     * flight), the service stops itself right after its foreground
+     * promotion, so the poll covers that path too.
+     */
+    @After
+    fun tearDown() {
+        CodexAgentService.stop(context)
+        val deadline = System.currentTimeMillis() + 10_000L
+        while (System.currentTimeMillis() < deadline) {
+            if (CodexAgentService.instance == null) return
+            Thread.sleep(100)
+        }
+    }
 
     @Test
     fun accessibilityService_isDeclared() {
@@ -51,24 +72,31 @@ class ServiceTest {
         try {
             CodexAgentService.start(context)
 
-            // The service sets CodexAgentService.instance in onCreate, so
-            // poll briefly for it instead of sleeping a fixed long time.
-            // onStartCommand degrades gracefully (stopSelf, no crash) if
-            // foreground promotion is refused, so instance-not-null is
-            // the only assertion — not "stays in foreground".
+            // The service sets CodexAgentService.instance in onCreate and
+            // CodexAgentService.isForeground once startForeground()
+            // succeeds, so poll for the foreground state — not just the
+            // instance. Asserting (or stopping) on a bare instance would
+            // race the pending promotion: startForegroundService()
+            // delivers creation asynchronously, and a stopService() that
+            // lands before startForeground() runs crashes the process
+            // with ForegroundServiceDidNotStartInTimeException.
             // 10 s, not 5: service creation on the slow no-KVM emulator
             // (process start + onCreate + notification channel) can take
             // several seconds, and a short poll would fail a service that
             // was still starting. The poll still returns the moment the
-            // instance appears.
+            // service reaches the foreground.
             var running: CodexAgentService? = null
             val deadline = System.currentTimeMillis() + 10_000L
             while (System.currentTimeMillis() < deadline) {
                 running = CodexAgentService.instance
-                if (running != null) break
+                if (running != null && CodexAgentService.isForeground) break
                 Thread.sleep(100)
             }
             assertNotNull("CodexAgentService did not start", running)
+            assertTrue(
+                "CodexAgentService did not reach the foreground",
+                CodexAgentService.isForeground,
+            )
         } finally {
             CodexAgentService.stop(context)
         }
