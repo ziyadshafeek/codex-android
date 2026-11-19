@@ -234,7 +234,9 @@ interface SkillSink {
  * Production wiring uses this; tests use an in-memory [SkillSink].
  */
 class SkillStoreSink(private val store: SkillStore) : SkillSink {
-    override suspend fun save(skill: Skill) = store.save(skill)
+    override suspend fun save(skill: Skill) {
+        store.save(skill)
+    }
 }
 
 /**
