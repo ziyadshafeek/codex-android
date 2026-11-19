@@ -86,9 +86,13 @@ class DatabaseThreadStore(private val database: CodexDatabase) : DaemonThreadSto
  * `ChatViewModel.runAgentTurn` pattern: an [dev.codex.android.agent.AgentLoop]
  * constructed from KeyStore settings (`OkHttpOpenAiClient` with the
  * stored base URL / API key / model, policy-gated [dev.codex.android.tools.ToolRegistry],
- * `DefaultApprovalGate`, `PlanStore`), driven inside the
- * [AgentRuntime.TurnContext] with `nextStepOrThrow` /
- * `emitAssistantDelta` / `drainSteeringMessages` / `requestApproval`.
+ * `DefaultApprovalGate`, `PlanStore`), driven with the
+ * [AgentRuntime.TurnContext] passed in as `turnContext` (the same
+ * explicit-parameter shape as `SubagentLoopFactory.runGoal` — a
+ * receiver-typed member on a `fun interface` does not resolve at the
+ * call site, so the context is a plain parameter here) with
+ * `nextStepOrThrow` / `emitAssistantDelta` / `drainSteeringMessages` /
+ * `requestApproval`.
  * That function is private to `ChatViewModel` in the repo, so it cannot
  * be reused directly — the integrator must extract it (or an
  * equivalent) into a shared helper and supply it here. Until one is
@@ -97,7 +101,8 @@ class DatabaseThreadStore(private val database: CodexDatabase) : DaemonThreadSto
  * assistant reply (a loud, visible failure, never a silent no-op).
  */
 fun interface AgentRunnerFactory {
-    suspend fun AgentRuntime.TurnContext.runTurn(
+    suspend fun runTurn(
+        turnContext: AgentRuntime.TurnContext,
         threadId: String,
         goal: String,
         mode: ExecutionMode,
@@ -353,7 +358,7 @@ class LocalDaemon(
                 val accepted = turnStarter.startTurn(threadId, goal, mode) {
                     val factory = runnerFactory
                     if (factory != null) {
-                        factory.runTurn(threadId, goal, mode)
+                        factory.runTurn(this, threadId, goal, mode)
                     } else {
                         "Turn accepted, but no agent runner is wired. " +
                             "Supply an AgentRunnerFactory built on the ChatViewModel AgentLoop pattern."
