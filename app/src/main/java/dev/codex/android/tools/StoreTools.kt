@@ -10,7 +10,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
@@ -19,17 +18,6 @@ import kotlinx.serialization.json.putJsonObject
 private fun emptyObjectSchema(): JsonObject = buildJsonObject {
     put("type", "object")
     putJsonObject("properties") {}
-}
-
-/**
- * Formats an integer-paise price for display, without floats:
- * 0 -> "free", 9900 -> "₹99.00", 199 -> "₹1.99".
- */
-internal fun formatPricePaise(pricePaise: Long): String {
-    if (pricePaise == 0L) return "free"
-    val rupees = pricePaise / 100
-    val paise = pricePaise % 100
-    return "₹$rupees.${paise.toString().padStart(2, '0')}"
 }
 
 /** The template ids [AppGenerator] accepts. */
@@ -41,15 +29,13 @@ private val STORE_TEMPLATES: Set<String> = setOf("counter", "notes", "timer")
  *
  * Not sensitive: generating an app and listing it unapproved is not in
  * the gated list (message / call / setting / money / delete). No payment
- * is taken — [pricePaise] is a stub listing price only, never charged.
- * Never throws.
+ * is taken. Never throws.
  */
 class GenerateAppTool(private val context: Context) : Tool {
     override val name: String = "generate_app"
     override val description: String =
         "Generates an app from a template (counter, notes, or timer), requests its APK " +
-            "build on the build service, and lists it in the store as pending approval " +
-            "at the given price in paise (0 = free)"
+            "build on the build service, and lists it in the store as pending approval"
     override val parametersSchema: JsonObject = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
@@ -69,10 +55,6 @@ class GenerateAppTool(private val context: Context) : Tool {
                     add(JsonPrimitive("notes"))
                     add(JsonPrimitive("timer"))
                 }
-            }
-            putJsonObject("price_paise") {
-                put("type", "integer")
-                put("description", "Store price in paise (e.g. 9900 = ₹99). 0 = free. Default 0.")
             }
         }
         putJsonArray("required") {
@@ -111,21 +93,6 @@ class GenerateAppTool(private val context: Context) : Tool {
                 error = "Unknown template \"$template\" — use one of: counter, notes, timer",
             )
         }
-        val pricePaise = args["price_paise"]?.jsonPrimitive?.longOrNull ?: 0L
-        if (args["price_paise"] != null && args["price_paise"]?.jsonPrimitive?.longOrNull == null) {
-            return ToolResult(
-                ok = false,
-                output = "",
-                error = "price_paise must be an integer number of paise",
-            )
-        }
-        if (pricePaise < 0) {
-            return ToolResult(
-                ok = false,
-                output = "",
-                error = "price_paise must not be negative",
-            )
-        }
 
         return try {
             val generated = AppGenerator.generate(name, description, template)
@@ -135,7 +102,6 @@ class GenerateAppTool(private val context: Context) : Tool {
                 appId = generated.id,
                 name = generated.name,
                 description = generated.description,
-                pricePaise = pricePaise,
                 status = AppBuildStatus.BUILD_REQUESTED,
                 approved = false,
             )
@@ -144,7 +110,7 @@ class GenerateAppTool(private val context: Context) : Tool {
                 ok = true,
                 output = "Generated '$name' from the $template template. Build requested — " +
                     "the APK build runs on the build service (not on this phone). " +
-                    "Listed in the store as pending approval at ${formatPricePaise(pricePaise)}.",
+                    "Listed in the store as pending approval.",
             )
         } catch (e: IllegalArgumentException) {
             ToolResult(ok = false, output = "", error = e.message ?: "Invalid app details")
@@ -164,7 +130,7 @@ class GenerateAppTool(private val context: Context) : Tool {
  */
 class ListStoreTool(private val context: Context) : Tool {
     override val name: String = "list_store"
-    override val description: String = "Lists the approved apps in the store, with their prices"
+    override val description: String = "Lists the approved apps in the store"
     override val parametersSchema: JsonObject = emptyObjectSchema()
     override val sensitive: Boolean = false
 
@@ -175,8 +141,7 @@ class ListStoreTool(private val context: Context) : Tool {
                 return ToolResult(ok = true, output = "The store is empty.")
             }
             val output = listings.mapIndexed { index, listing ->
-                "${index + 1}. ${listing.name} — ${listing.description} — " +
-                    formatPricePaise(listing.pricePaise)
+                "${index + 1}. ${listing.name} — ${listing.description}"
             }.joinToString("\n")
             ToolResult(ok = true, output = output)
         } catch (e: Exception) {

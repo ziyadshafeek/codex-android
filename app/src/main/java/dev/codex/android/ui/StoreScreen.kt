@@ -9,8 +9,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -30,7 +28,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.codex.android.store.AppGenerator
@@ -44,10 +41,10 @@ import kotlinx.coroutines.launch
  * Phase 6 mini app store (skeleton, not a marketplace).
  *
  * The agent generates small apps from three templates (counter, notes,
- * timer) and lists them in a local catalogue with a price in INR and a
- * moderation flag (approved / pending). The APK build runs on a build
- * service, not on the phone. Payments are NOT live: the Buy button only
- * shows a "not live yet" dialog. No payment code anywhere in this file.
+ * timer) and lists them in a local catalogue with a moderation flag
+ * (approved / pending). The APK build runs on a build service, not on
+ * the phone. The store lists apps only; it takes no payment and holds
+ * no payment code anywhere in this file.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -62,9 +59,7 @@ fun StoreScreen(onBack: () -> Unit) {
     var selectedTemplateId by remember { mutableStateOf("counter") }
     var appName by remember { mutableStateOf("") }
     var appDescription by remember { mutableStateOf("") }
-    var priceRupees by remember { mutableStateOf("") }
     var statusMessage by remember { mutableStateOf<String?>(null) }
-    var buyTarget by remember { mutableStateOf<StoreListing?>(null) }
 
     fun reload() {
         scope.launch {
@@ -156,14 +151,6 @@ fun StoreScreen(onBack: () -> Unit) {
                     modifier = Modifier.fillMaxWidth().testTag("store_app_description")
                 )
                 Spacer(modifier = Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = priceRupees,
-                    onValueChange = { priceRupees = it.filter { ch -> ch.isDigit() } },
-                    label = { Text("Price in rupees (empty = free)") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.fillMaxWidth().testTag("store_price")
-                )
-                Spacer(modifier = Modifier.height(12.dp))
                 Button(
                     onClick = {
                         scope.launch {
@@ -179,13 +166,6 @@ fun StoreScreen(onBack: () -> Unit) {
                                     templates.none { it.id == selectedTemplateId }
                                 ) {
                                     statusMessage = "Unknown template selected."
-                                    return@launch
-                                }
-                                val rupees = if (priceRupees.isBlank()) 0L
-                                else priceRupees.toLongOrNull()
-                                if (rupees == null) {
-                                    statusMessage =
-                                        "Price must be a whole number of rupees."
                                     return@launch
                                 }
                                 val generated = AppGenerator.generate(
@@ -205,7 +185,6 @@ fun StoreScreen(onBack: () -> Unit) {
                                         appId = requested.id,
                                         name = name,
                                         description = description,
-                                        pricePaise = rupees * 100,
                                         status = requested.status,
                                         approved = false,
                                         createdAtMillis = System.currentTimeMillis()
@@ -213,7 +192,6 @@ fun StoreScreen(onBack: () -> Unit) {
                                 )
                                 appName = ""
                                 appDescription = ""
-                                priceRupees = ""
                                 statusMessage = "Generated '$name'. Build requested. " +
                                     "Listed as pending approval."
                                 reload()
@@ -256,7 +234,7 @@ fun StoreScreen(onBack: () -> Unit) {
                 }
             } else {
                 items(approved) { listing ->
-                    StoreRow(listing = listing, onBuy = { buyTarget = listing })
+                    StoreRow(listing = listing)
                 }
             }
 
@@ -279,47 +257,16 @@ fun StoreScreen(onBack: () -> Unit) {
                 }
             } else {
                 items(pending) { listing ->
-                    StoreRow(listing = listing, onBuy = null)
+                    StoreRow(listing = listing)
                 }
-            }
-
-            item {
-                Spacer(modifier = Modifier.height(24.dp))
-                Text(
-                    text = "Payments are not live yet. The store lists apps and takes " +
-                        "requests; real payments and publishing come later.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.testTag("store_payments_note")
-                )
-                Spacer(modifier = Modifier.height(16.dp))
             }
         }
     }
-
-    val target = buyTarget
-    if (target != null) {
-        AlertDialog(
-            onDismissRequest = { buyTarget = null },
-            title = { Text("Payments are not live yet") },
-            text = {
-                Text(
-                    "Buying is not enabled in this version. The store lists apps " +
-                        "and takes requests; real payments and publishing come later."
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = { buyTarget = null }) {
-                    Text("OK")
-                }
-            }
-        )
-    }
 }
 
-/** One store row: name, one-line description, price, status, Buy button. */
+/** One store row: name, one-line description, build status. */
 @Composable
-private fun StoreRow(listing: StoreListing, onBuy: (() -> Unit)?) {
+private fun StoreRow(listing: StoreListing) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -339,24 +286,11 @@ private fun StoreRow(listing: StoreListing, onBuy: (() -> Unit)?) {
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = "${formatPrice(listing.pricePaise)} · " +
-                        listing.status.name.replace('_', ' '),
+                    text = listing.status.name.replace('_', ' '),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            if (onBuy != null) {
-                TextButton(onClick = onBuy) {
-                    Text("Buy")
-                }
-            }
         }
     }
-}
-
-private fun formatPrice(pricePaise: Long): String {
-    if (pricePaise <= 0) return "Free"
-    val rupees = pricePaise / 100
-    val paise = pricePaise % 100
-    return if (paise == 0L) "₹$rupees" else "₹$rupees.${paise.toString().padStart(2, '0')}"
 }

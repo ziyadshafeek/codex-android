@@ -13,6 +13,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Release rule (2026-11-20): zero placeholders in the shipped app.
+      # Fails the build if AI-filler / stub markers reach app/src/main.
+      # Tests are excluded: a test may assert that a bad hash fails closed.
+      - name: No placeholders in shipped source
+        run: |
+          if grep -rnE 'PLACEHOLDER_HASH_TO_PIN|WorkbenchPlaceholderTab|workbench_terminal_placeholder|workbench_browser_placeholder|Placeholder for|TODO|FIXME|coming soon|not implemented|lorem ipsum' app/src/main; then
+            echo "Placeholder / filler strings found in app/src/main — see above"
+            exit 1
+          fi
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:

@@ -248,7 +248,6 @@ class OnboardingHistoryStoreTest {
         composeTestRule.onNodeWithText("Timer").assertIsDisplayed()
         composeTestRule.onNodeWithTag("store_app_name").assertIsDisplayed()
         composeTestRule.onNodeWithTag("store_app_description").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("store_price").assertIsDisplayed()
         composeTestRule.onNodeWithTag("store_generate").assertIsDisplayed()
         composeTestRule.onNodeWithText("Generate").assertIsDisplayed()
 
@@ -262,14 +261,6 @@ class OnboardingHistoryStoreTest {
         composeTestRule.onNodeWithText("Pending approval").assertIsDisplayed()
         composeTestRule.onNodeWithText("Nothing waiting for approval.")
             .assertIsDisplayed()
-
-        // Bottom payments note.
-        composeTestRule.onNodeWithTag("store_payments_note").performScrollTo()
-        composeTestRule.onNodeWithTag("store_payments_note").assertIsDisplayed()
-        composeTestRule.onNodeWithText(
-            "Payments are not live yet. The store lists apps and takes " +
-                "requests; real payments and publishing come later."
-        ).assertIsDisplayed()
 
         backToChat()
     }
@@ -318,11 +309,9 @@ class OnboardingHistoryStoreTest {
     }
 
     @Test
-    fun f_store_buyShowsNotLiveDialog() {
+    fun f_store_approvedListingHasNoBuyButton() {
         // Seed ONE approved listing directly in the catalogue before
-        // opening the Store. Newly generated listings are pending
-        // (approved=false) and show no Buy button, so generation alone
-        // cannot exercise Buy. StoreCatalog is a plain class over
+        // opening the Store. StoreCatalog is a plain class over
         // codex_store.json in the app files dir; StoreScreen creates its
         // own catalog and reloads it in LaunchedEffect when the Store
         // first composes, so seeding here (before tapping Store) is
@@ -337,7 +326,6 @@ class OnboardingHistoryStoreTest {
                     appId = UUID.randomUUID().toString(),
                     name = "Approved Test App",
                     description = "An approved test app",
-                    pricePaise = 9900L,
                     status = AppBuildStatus.BUILD_REQUESTED,
                     approved = true,
                     createdAtMillis = System.currentTimeMillis(),
@@ -348,26 +336,20 @@ class OnboardingHistoryStoreTest {
         openStore()
 
         // The seeded listing is in the approved section, so the approved
-        // empty text is gone and the listing has a Buy button (pending
-        // rows, e.g. e_'s "Test Counter", have none).
+        // empty text is gone.
         composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithText("Approved Test App")
                 .fetchSemanticsNodes().isNotEmpty()
         }
         composeTestRule.onNodeWithText("Approved Test App").performScrollTo()
         composeTestRule.onNodeWithText("Approved Test App").assertIsDisplayed()
+        composeTestRule.onNodeWithText("An approved test app").assertIsDisplayed()
+        composeTestRule.onNodeWithText("BUILD REQUESTED").assertIsDisplayed()
         composeTestRule.onAllNodesWithText("No apps listed yet.").assertCountEquals(0)
 
-        composeTestRule.onNodeWithText("Buy").performClick()
-
-        // The Buy dialog: title "Payments are not live yet", dismiss OK.
-        composeTestRule.waitUntil(timeoutMillis = 15_000) {
-            composeTestRule.onAllNodesWithText("Payments are not live yet")
-                .fetchSemanticsNodes().isNotEmpty()
-        }
-        composeTestRule.onNodeWithText("Payments are not live yet")
-            .assertIsDisplayed()
-        composeTestRule.onNodeWithText("OK").performClick()
+        // The store lists apps only: no Buy control anywhere, and no
+        // payments dialog text.
+        composeTestRule.onAllNodesWithText("Buy").assertCountEquals(0)
         composeTestRule.onAllNodesWithText("Payments are not live yet")
             .assertCountEquals(0)
 

@@ -13,8 +13,8 @@ import java.io.File
  * never throws — a corrupt or missing file simply yields an empty list,
  * and a failed save is swallowed (the in-memory state still works).
  *
- * Payments are a stub only: listings carry an integer-paise price, but
- * no payment provider, SDK, or charging exists anywhere in the store.
+ * The store lists apps only. It takes no payment and holds no payment
+ * provider, SDK, or charging code.
  */
 class StoreCatalog(context: Context) {
 

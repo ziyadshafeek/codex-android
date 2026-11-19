@@ -5,10 +5,9 @@ import kotlinx.serialization.Serializable
 /**
  * One app listed in the mini app store.
  *
- * [pricePaise] is the price in paise (e.g. 9900 = ₹99; 0 = free).
- * Prices are integer paise, never float. [approved] is the moderation
- * flag — false until a human approves the listing. [status] tracks the
- * build state of the app (see [AppBuildStatus]).
+ * [approved] is the moderation flag — false until a human approves the
+ * listing. [status] tracks the build state of the app (see
+ * [AppBuildStatus]). The store lists apps only; it takes no payment.
  */
 @Serializable
 data class StoreListing(
@@ -16,8 +15,6 @@ data class StoreListing(
     val appId: String,
     val name: String,
     val description: String,
-    val pricePaise: Long,
-    val currency: String = "INR",
     val status: AppBuildStatus,
     val approved: Boolean,
     val createdAtMillis: Long = System.currentTimeMillis(),

@@ -268,8 +268,8 @@ class ShareActivity : ComponentActivity() {
 
     /**
      * One human-readable block per shared URI. Never assumes a file path
-     * and never throws: metadata/read failures degrade to a placeholder
-     * line naming the problem.
+     * and never throws: when metadata or content cannot be read, the
+     * block records the name, type and size only.
      */
     private fun describeSharedUri(uri: Uri): String {
         val (displayName, size) = queryUriMeta(uri)
@@ -281,20 +281,17 @@ class ShareActivity : ComponentActivity() {
         val sizeText = size?.let { " (${formatSize(it)})" } ?: ""
         return when {
             mime?.startsWith("image/") == true ->
-                "Shared image: $name$mimeText$sizeText\n" +
-                    "[Image content is not inlined — recorded by name only.]"
+                "Shared image: $name$mimeText$sizeText"
             isInlineText(mime, name) -> {
                 val text = readTextContent(uri, MAX_SHARED_FILE_TEXT_CHARS)
                 if (text != null) {
                     "Shared file: $name$mimeText$sizeText\n$text"
                 } else {
-                    "Shared file: $name$mimeText$sizeText\n" +
-                        "[Could not read the file content — recorded by name only.]"
+                    "Shared file: $name$mimeText$sizeText"
                 }
             }
             else ->
-                "Shared file: $name$mimeText$sizeText\n" +
-                    "[Content not inlined — recorded by name only.]"
+                "Shared file: $name$mimeText$sizeText"
         }
     }
 
