@@ -646,14 +646,14 @@ class RootfsManager internal constructor(
         val PINNED_ARTIFACTS: List<PinnedArtifact> = listOf(
             PinnedArtifact(
                 id = ARTIFACT_ALPINE_ROOTFS,
-                url = "https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/aarch64/alpine-minirootfs-3.20.3-aarch64.tar.gz",
+                url = "https://codex-runtime-assets.pages.dev/alpine-minirootfs-3.20.3-aarch64.tar.gz",
                 expectedSha256 = "041fa34a81788242df9e78fa69b97ab45b8ec47ddbf88864755610414a7bf3de",
                 license = "MIT / Alpine",
                 destinationRelativePath = "rootfs/",
             ),
             PinnedArtifact(
                 id = ARTIFACT_PROOT_DEB,
-                url = "https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_5.1.107.102_aarch64.deb",
+                url = "https://codex-runtime-assets.pages.dev/proot_5.1.107.102_aarch64.deb",
                 expectedSha256 = "10a394b585c2fc2b2c8502544f4e5f1be581dc8bfff79e8ba62f16207423e030",
                 license = "GPL-2.0",
                 destinationRelativePath = "jniLibs/arm64-v8a/",
@@ -675,7 +675,7 @@ class RootfsManager internal constructor(
             ),
             PinnedArtifact(
                 id = ARTIFACT_LIBTALLOC_DEB,
-                url = "https://packages.termux.dev/apt/termux-main/pool/main/libt/libtalloc/libtalloc_2.5.0_aarch64.deb",
+                url = "https://codex-runtime-assets.pages.dev/libtalloc_2.5.0_aarch64.deb",
                 expectedSha256 = "556591f43bb773ad8777e1a29522640866a55f95dab71914418b94a8c58ad5a7",
                 // LGPL-3.0-or-later (Samba talloc; Debian copyright lists
                 // lib/talloc/* as LGPL-3+). NOT GPL-3.0.
@@ -696,7 +696,7 @@ class RootfsManager internal constructor(
             ),
             PinnedArtifact(
                 id = ARTIFACT_LIBANDROID_SHMEM_DEB,
-                url = "https://packages.termux.dev/apt/termux-main/pool/main/liba/libandroid-shmem/libandroid-shmem_0.7_aarch64.deb",
+                url = "https://codex-runtime-assets.pages.dev/libandroid-shmem_0.7_aarch64.deb",
                 expectedSha256 = "0da3a24d558b93c92bcf8d611e0826a99ff96e396b148e6cdf33b47c47c57ff6",
                 // BSD-3-Clause (termux/libandroid-shmem LICENSE:
                 // (c) 2013 Sergii Pylypenko, (c) 2017 Fredrik Fornwall).

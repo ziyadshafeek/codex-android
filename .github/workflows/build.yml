@@ -36,13 +36,13 @@ jobs:
           mkdir -p app/src/main/jniLibs/arm64-v8a deb-tmp
           cd deb-tmp
           curl -fsSL -o proot.deb \
-            https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_5.1.107.102_aarch64.deb
+            https://codex-runtime-assets.pages.dev/proot_5.1.107.102_aarch64.deb
           echo "10a394b585c2fc2b2c8502544f4e5f1be581dc8bfff79e8ba62f16207423e030  proot.deb" | sha256sum -c -
           curl -fsSL -o libtalloc.deb \
-            https://packages.termux.dev/apt/termux-main/pool/main/libt/libtalloc/libtalloc_2.5.0_aarch64.deb
+            https://codex-runtime-assets.pages.dev/libtalloc_2.5.0_aarch64.deb
           echo "556591f43bb773ad8777e1a29522640866a55f95dab71914418b94a8c58ad5a7  libtalloc.deb" | sha256sum -c -
           curl -fsSL -o libandroid-shmem.deb \
-            https://packages.termux.dev/apt/termux-main/pool/main/liba/libandroid-shmem/libandroid-shmem_0.7_aarch64.deb
+            https://codex-runtime-assets.pages.dev/libandroid-shmem_0.7_aarch64.deb
           echo "0da3a24d558b93c92bcf8d611e0826a99ff96e396b148e6cdf33b47c47c57ff6  libandroid-shmem.deb" | sha256sum -c -
           ar x proot.deb
           tar -xf data.tar.xz
