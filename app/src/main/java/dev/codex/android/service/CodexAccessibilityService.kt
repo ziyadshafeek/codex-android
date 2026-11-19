@@ -149,21 +149,27 @@ class CodexAccessibilityService : AccessibilityService() {
      * Returns null when there is no usable root, or [block] throws.
      */
     private inline fun <T> withRoot(block: (AccessibilityNodeInfo) -> T): T? {
-        var root: AccessibilityNodeInfo? = null
-        var owned = false
-        return try {
-            root = runCatching { rootInActiveWindow }.getOrNull()
-            if (root == null) {
-                synchronized(cacheLock) { root = cachedRoot }
-            } else {
-                owned = true
+        // Prefer a fresh root; recycle it after use. `fresh` and `cached`
+        // are vals so the null checks below smart-cast cleanly (a `var`
+        // captured by the synchronized lambda cannot be smart-cast).
+        val fresh = runCatching { rootInActiveWindow }.getOrNull()
+        if (fresh != null) {
+            try {
+                return block(fresh)
+            } catch (e: Exception) {
+                Log.w(TAG, "Root window operation failed: ${e.javaClass.simpleName}")
+                return null
+            } finally {
+                runCatching { fresh.recycle() }
             }
-            if (root == null) null else block(root)
+        }
+        val cached: AccessibilityNodeInfo? = synchronized(cacheLock) { cachedRoot }
+        if (cached == null) return null
+        return try {
+            block(cached)
         } catch (e: Exception) {
             Log.w(TAG, "Root window operation failed: ${e.javaClass.simpleName}")
             null
-        } finally {
-            if (owned) runCatching { root?.recycle() }
         }
     }
 

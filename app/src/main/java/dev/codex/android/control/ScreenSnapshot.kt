@@ -110,9 +110,12 @@ object ScreenSnapshot {
             if (runCatching { node.isClickable }.getOrDefault(false)) return node
             var parent = runCatching { node.parent }.getOrNull()
             while (parent != null) {
-                if (runCatching { parent.isClickable }.getOrDefault(false)) return parent
-                val next = runCatching { parent.parent }.getOrNull()
-                runCatching { parent.recycle() }
+                // Bind to a val: `parent` is a var captured by the runCatching
+                // lambdas below, so Kotlin cannot smart-cast it to non-null.
+                val current = parent
+                if (runCatching { current.isClickable }.getOrDefault(false)) return current
+                val next = runCatching { current.parent }.getOrNull()
+                runCatching { current.recycle() }
                 parent = next
             }
             return null
