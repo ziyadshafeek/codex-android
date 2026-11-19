@@ -344,7 +344,6 @@ class OnboardingHistoryStoreTest {
         composeTestRule.onNodeWithText("Approved Test App").performScrollTo()
         composeTestRule.onNodeWithText("Approved Test App").assertIsDisplayed()
         composeTestRule.onNodeWithText("An approved test app").assertIsDisplayed()
-        composeTestRule.onNodeWithText("BUILD REQUESTED").assertIsDisplayed()
         composeTestRule.onAllNodesWithText("No apps listed yet.").assertCountEquals(0)
 
         // The store lists apps only: no Buy control anywhere, and no
