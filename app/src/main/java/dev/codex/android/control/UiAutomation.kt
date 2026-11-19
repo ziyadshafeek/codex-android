@@ -1,5 +1,6 @@
 package dev.codex.android.control
 
+import dev.codex.android.accessibility.UiNode
 import dev.codex.android.service.CodexAccessibilityService
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -36,6 +37,59 @@ object UiAutomation {
         return withTimeoutOrNull(OPERATION_TIMEOUT_MS) {
             service.readScreenText()
         } ?: "Accessibility service timed out while reading the screen."
+    }
+
+    /**
+     * Structured UI tree of the current screen (see [UiNode]), or null
+     * when the service is unavailable or the screen exposes no nodes.
+     */
+    suspend fun readScreenTree(): UiNode? {
+        val service = CodexAccessibilityService.instance ?: return null
+        return withTimeoutOrNull(OPERATION_TIMEOUT_MS) {
+            service.readScreenTree()
+        }
+    }
+
+    /**
+     * Taps the node with pre-order [nodeId] from the latest
+     * [readScreenTree] snapshot. False when the id no longer exists or
+     * the service is unavailable.
+     */
+    suspend fun tapNode(nodeId: Int): Boolean {
+        if (nodeId < 0) return false
+        val service = CodexAccessibilityService.instance ?: return false
+        return withTimeoutOrNull(OPERATION_TIMEOUT_MS) {
+            service.tapNode(nodeId)
+        } ?: false
+    }
+
+    /** Types [text] into the editable node with pre-order [nodeId]. */
+    suspend fun typeIntoNode(nodeId: Int, text: String): Boolean {
+        if (nodeId < 0 || text.isEmpty()) return false
+        val service = CodexAccessibilityService.instance ?: return false
+        return withTimeoutOrNull(OPERATION_TIMEOUT_MS) {
+            service.typeIntoNode(nodeId, text)
+        } ?: false
+    }
+
+    /** Swipes from ([x1], [y1]) to ([x2], [y2]) over [durationMs]. */
+    suspend fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Int): Boolean {
+        val service = CodexAccessibilityService.instance ?: return false
+        return withTimeoutOrNull(OPERATION_TIMEOUT_MS) {
+            service.swipe(x1, y1, x2, y2, durationMs)
+        } ?: false
+    }
+
+    /**
+     * Screenshot fallback path: absolute path of a PNG in this app's
+     * private cacheDir, or null when screenshots are unavailable. Used
+     * by read_screen when the UI tree (and the text dump) are empty.
+     */
+    suspend fun captureScreenshotToFile(): String? {
+        val service = CodexAccessibilityService.instance ?: return null
+        return withTimeoutOrNull(OPERATION_TIMEOUT_MS) {
+            service.captureScreenshotToFile()
+        }
     }
 
     /**

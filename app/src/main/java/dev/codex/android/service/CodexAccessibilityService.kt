@@ -4,16 +4,23 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.accessibilityservice.GestureDescription.StrokeDescription
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.Path
+import android.graphics.Rect
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import dev.codex.android.accessibility.UiNode
 import dev.codex.android.control.ScreenSnapshot
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
+import java.io.File
+import java.io.FileOutputStream
 
 /**
  * Phase 2 — Android control via AccessibilityService.
@@ -206,14 +213,23 @@ class CodexAccessibilityService : AccessibilityService() {
     /** Taps the screen at absolute coordinates ([x], [y]) via dispatchGesture. */
     suspend fun tapAt(x: Int, y: Int): Boolean {
         if (x < 0 || y < 0) return false
+        val path = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
+        val gesture = GestureDescription.Builder()
+            .addStroke(StrokeDescription(path, 0, TAP_DURATION_MS))
+            .build()
+        return dispatchGesture(gesture)
+    }
+
+    /**
+     * Dispatches one [GestureDescription] and awaits its result, bounded
+     * by [OPERATION_TIMEOUT_MS]. Shared by [tapAt] and [swipe] so the
+     * pending-gesture bookkeeping lives in exactly one place.
+     */
+    private suspend fun dispatchGesture(gesture: GestureDescription): Boolean {
         return withTimeoutOrNull(OPERATION_TIMEOUT_MS) {
             gestureMutex.withLock {
                 val deferred = CompletableDeferred<Boolean>()
                 pendingGesture = deferred
-                val path = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
-                val gesture = GestureDescription.Builder()
-                    .addStroke(StrokeDescription(path, 0, TAP_DURATION_MS))
-                    .build()
                 val dispatched = runCatching {
                     dispatchGesture(gesture, gestureCallback, null)
                 }.getOrDefault(false)
@@ -228,6 +244,136 @@ class CodexAccessibilityService : AccessibilityService() {
             pendingGesture?.let { if (!it.isCompleted) it.complete(false) }
             pendingGesture = null
             false
+        }
+    }
+
+    /**
+     * Structured UI tree of the current screen (see [UiNode]), or null
+     * when the service is unusable or the screen exposes no nodes at all
+     * (WebViews / Canvas apps — the read_screen fallback handles those).
+     */
+    suspend fun readScreenTree(): UiNode? =
+        withTimeoutOrNull(OPERATION_TIMEOUT_MS) {
+            withRoot { root -> UiNode.buildUiTree(root) }
+        }
+
+    /**
+     * Taps the node with pre-order [nodeId] from the latest
+     * [readScreenTree] snapshot: ACTION_CLICK when the node is clickable,
+     * otherwise a gesture tap at the centre of its bounds. False when the
+     * id no longer exists (the screen moved — re-read it first).
+     */
+    suspend fun tapNode(nodeId: Int): Boolean {
+        if (nodeId < 0) return false
+        return withTimeoutOrNull(OPERATION_TIMEOUT_MS) {
+            withRoot { root ->
+                val target = UiNode.findLiveNodeById(root, nodeId) ?: return@withRoot false
+                try {
+                    if (runCatching { target.isClickable }.getOrDefault(false)) {
+                        runCatching { target.performAction(AccessibilityNodeInfo.ACTION_CLICK) }
+                            .getOrDefault(false)
+                    } else {
+                        val bounds = Rect()
+                        runCatching { target.getBoundsInScreen(bounds) }
+                        if (bounds.isEmpty) false else tapAt(bounds.centerX(), bounds.centerY())
+                    }
+                } finally {
+                    if (target !== root) runCatching { target.recycle() }
+                }
+            } ?: false
+        } ?: false
+    }
+
+    /**
+     * Types [text] into the node with pre-order [nodeId] (must be an
+     * editable field). False when the id does not exist or the node is
+     * not editable — use [typeText] for the focused-field fallback.
+     */
+    suspend fun typeIntoNode(nodeId: Int, text: String): Boolean {
+        if (nodeId < 0 || text.isEmpty()) return false
+        return withTimeoutOrNull(OPERATION_TIMEOUT_MS) {
+            withRoot { root ->
+                val target = UiNode.findLiveNodeById(root, nodeId) ?: return@withRoot false
+                try {
+                    if (!runCatching { target.isEditable }.getOrDefault(false)) return@withRoot false
+                    if (!runCatching { target.isFocused }.getOrDefault(false)) {
+                        runCatching { target.performAction(AccessibilityNodeInfo.ACTION_FOCUS) }
+                    }
+                    val args = Bundle().apply {
+                        putCharSequence(
+                            AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                            text,
+                        )
+                    }
+                    runCatching { target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args) }
+                        .getOrDefault(false)
+                } finally {
+                    if (target !== root) runCatching { target.recycle() }
+                }
+            } ?: false
+        } ?: false
+    }
+
+    /**
+     * Swipes from ([x1], [y1]) to ([x2], [y2]) over [durationMs]
+     * (clamped to 100–2000 ms). Used for precise scrolling, dismissing
+     * cards, and drag gestures the scroll actions cannot express.
+     */
+    suspend fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Int): Boolean {
+        if (x1 < 0 || y1 < 0 || x2 < 0 || y2 < 0) return false
+        val duration = durationMs.coerceIn(100, 2000).toLong()
+        val path = Path().apply {
+            moveTo(x1.toFloat(), y1.toFloat())
+            lineTo(x2.toFloat(), y2.toFloat())
+        }
+        val gesture = GestureDescription.Builder()
+            .addStroke(StrokeDescription(path, 0, duration))
+            .build()
+        return dispatchGesture(gesture)
+    }
+
+    /**
+     * Screenshot of the current screen via the AccessibilityService
+     * `takeScreenshot()` API (API 30+), saved as a PNG in this app's
+     * private cacheDir. Returns the file's absolute path, or null when
+     * screenshots are unavailable (below API 30, secure window, or the
+     * system refused). This is the FIRST fallback when the UI tree is
+     * empty — it needs no extra permission and no user consent beyond
+     * the accessibility service itself. The MediaProjection path in
+     * [MediaProjectionCapture] is the second fallback.
+     */
+    suspend fun captureScreenshotToFile(): String? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+        val deferred = CompletableDeferred<Bitmap?>()
+        val dispatched = runCatching {
+            takeScreenshot(
+                Display.DEFAULT_DISPLAY,
+                mainExecutor,
+                object : TakeScreenshotCallback {
+                    override fun onSuccess(screenshot: ScreenshotResult) {
+                        deferred.complete(runCatching { screenshot.bitmap }.getOrNull())
+                    }
+
+                    override fun onFailure(errorCode: Int) {
+                        Log.w(TAG, "takeScreenshot failed: errorCode=$errorCode")
+                        deferred.complete(null)
+                    }
+                },
+            )
+        }.getOrDefault(false)
+        if (!dispatched) return null
+        val bitmap = withTimeoutOrNull(OPERATION_TIMEOUT_MS) { deferred.await() } ?: return null
+        return try {
+            val file = File(cacheDir, "codex_screen_fallback.png")
+            FileOutputStream(file).use { out ->
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+            }
+            file.absolutePath
+        } catch (e: Exception) {
+            Log.w(TAG, "Saving screenshot failed: ${e.javaClass.simpleName}")
+            null
+        } finally {
+            runCatching { bitmap.recycle() }
         }
     }
 

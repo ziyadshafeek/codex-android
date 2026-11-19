@@ -1,6 +1,7 @@
 package dev.codex.android.tools
 
 import dev.codex.android.control.UiAutomation
+import dev.codex.android.service.MediaProjectionCapture
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -25,24 +26,31 @@ private fun noArgsSchema(): JsonObject = buildJsonObject {
 }
 
 /**
- * Taps a UI element on the current screen, by its visible text
- * or by screen coordinates. Prefer [UiAutomation.tapText] when the
- * element has readable text; use coordinates only when the target
- * has no text (e.g. an icon) and its position is known from
- * [ReadScreenTool] or a previous tap.
+ * Taps a UI element on the current screen, by its node id from
+ * [ReadScreenTool], by its visible text, or by screen coordinates.
+ * Prefer [UiAutomation.tapNode] with a `node_id` from the ui_tree when
+ * the element has one — it is exact, unlike text matching (which can
+ * hit the wrong duplicate) or raw coordinates (which go stale when the
+ * screen moves). Use coordinates only when the target has no node id
+ * (e.g. a drawn icon inside a Canvas) and its position is known from
+ * the tree's centre coordinates.
  *
- * Takes EITHER `text` OR `x` + `y`. Because [ToolCallParser] rejects
- * a call missing any parameter listed in "required", this schema
- * lists no required parameters and the either/or check happens in
- * [execute] instead. When both forms are given, coordinates win.
+ * Takes `node_id` OR `text` OR `x` + `y`. Because [ToolCallParser]
+ * rejects a call missing any parameter listed in "required", this
+ * schema lists no required parameters and the check happens in
+ * [execute] instead. Precedence: node_id, then coordinates, then text.
  */
 object TapTool : Tool {
     override val name: String = "tap"
     override val description: String =
-        "Taps a UI element on the current screen by its visible text, or by screen coordinates (x, y)"
+        "Taps a UI element on the current screen by its node id from read_screen, by its visible text, or by screen coordinates (x, y)"
     override val parametersSchema: JsonObject = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
+            putJsonObject("node_id") {
+                put("type", "integer")
+                put("description", "Node id from the read_screen ui_tree, e.g. 3 for '[3] Button \"Search\"'")
+            }
             putJsonObject("text") {
                 put("type", "string")
                 put("description", "Visible text of the element to tap, e.g. the label of a button")
@@ -56,7 +64,7 @@ object TapTool : Tool {
                 put("description", "Vertical screen coordinate to tap; use together with x")
             }
         }
-        // No "required": either text or x+y is valid (see class doc).
+        // No "required": node_id, text, or x+y is valid (see class doc).
     }
     override val sensitive: Boolean = false
 
@@ -64,11 +72,23 @@ object TapTool : Tool {
         if (!UiAutomation.isAvailable()) {
             return ToolResult(ok = false, output = "", error = NOT_ENABLED_ERROR)
         }
+        val nodeId = args["node_id"]?.jsonPrimitive?.intOrNull
         val x = args["x"]?.jsonPrimitive?.intOrNull
         val y = args["y"]?.jsonPrimitive?.intOrNull
         val text = args["text"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
         return try {
             when {
+                nodeId != null -> {
+                    if (UiAutomation.tapNode(nodeId)) {
+                        ToolResult(ok = true, output = "Tapped node $nodeId")
+                    } else {
+                        ToolResult(
+                            ok = false,
+                            output = "",
+                            error = "No node $nodeId on the current screen — re-read the screen first, ids change when the screen moves",
+                        )
+                    }
+                }
                 x != null && y != null -> {
                     if (UiAutomation.tapAt(x, y)) {
                         ToolResult(ok = true, output = "Tapped at ($x, $y)")
@@ -99,7 +119,7 @@ object TapTool : Tool {
                 else -> ToolResult(
                     ok = false,
                     output = "",
-                    error = "Provide either 'text' or both 'x' and 'y'",
+                    error = "Provide 'node_id', 'text', or both 'x' and 'y'",
                 )
             }
         } catch (e: Exception) {
@@ -109,20 +129,25 @@ object TapTool : Tool {
 }
 
 /**
- * Types text into the currently focused editable field.
+ * Types text into an editable field: the node with `node_id` from the
+ * ui_tree when given, otherwise the currently focused editable field.
  * Sensitive: typed text can send messages or fill in forms, so the
  * approval gate must cover it. Tap the field first to focus it.
  */
 object TypeTextTool : Tool {
     override val name: String = "type_text"
     override val description: String =
-        "Types text into the currently focused editable field, e.g. a search box or message field"
+        "Types text into an editable field — the node_id from read_screen when given, otherwise the currently focused editable field, e.g. a search box or message field"
     override val parametersSchema: JsonObject = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("text") {
                 put("type", "string")
-                put("description", "Text to type into the focused field")
+                put("description", "Text to type into the field")
+            }
+            putJsonObject("node_id") {
+                put("type", "integer")
+                put("description", "Node id of the editable field from the read_screen ui_tree; omit to type into the focused field")
             }
         }
         putJsonArray("required") { add(JsonPrimitive("text")) }
@@ -138,9 +163,21 @@ object TypeTextTool : Tool {
         if (text.isEmpty()) {
             return ToolResult(ok = false, output = "", error = "Text must not be empty")
         }
+        val nodeId = args["node_id"]?.jsonPrimitive?.intOrNull
         return try {
-            if (UiAutomation.typeText(text)) {
+            val typed = if (nodeId != null) {
+                UiAutomation.typeIntoNode(nodeId, text)
+            } else {
+                UiAutomation.typeText(text)
+            }
+            if (typed) {
                 ToolResult(ok = true, output = "Typed text")
+            } else if (nodeId != null) {
+                ToolResult(
+                    ok = false,
+                    output = "",
+                    error = "Could not type into node $nodeId — it is not an editable field or no longer exists. Re-read the screen first.",
+                )
             } else {
                 ToolResult(
                     ok = false,
@@ -155,14 +192,26 @@ object TypeTextTool : Tool {
 }
 
 /**
- * Returns the visible text of the current screen, as a dump from
- * the accessibility service. Use it to see what is on screen before
- * deciding what to tap or type.
+ * Returns the structured UI tree (`ui_tree`) of the current screen —
+ * one numbered line per element, `[3] Button "Search" clickable
+ * (540,212)` — from the accessibility service. Use the node ids and
+ * centre coordinates to tap / type precisely. Read it before tapping
+ * or typing, and re-read it after every action: ids go stale as soon
+ * as the screen moves.
+ *
+ * Fallback chain when the tree is empty (WebViews, Canvas / game /
+ * map apps expose no nodes):
+ * 1. the old flat text dump, when the screen has any readable text;
+ * 2. an Accessibility `takeScreenshot()` PNG in the app's private
+ *    cacheDir (no extra permission needed);
+ * 3. a MediaProjection capture, but only after the user granted
+ *    screen-capture consent — never silently. Without consent the
+ *    tool fails with instructions instead of capturing.
  */
 object ReadScreenTool : Tool {
     override val name: String = "read_screen"
     override val description: String =
-        "Returns the visible text of the current screen; use it to see what is on screen before tapping or typing"
+        "Returns the structured UI tree of the current screen (one numbered line per element with node id and centre coordinates); use it to see what is on screen before tapping or typing"
     override val parametersSchema: JsonObject = noArgsSchema()
     override val sensitive: Boolean = false
 
@@ -171,20 +220,60 @@ object ReadScreenTool : Tool {
             return ToolResult(ok = false, output = "", error = NOT_ENABLED_ERROR)
         }
         return try {
+            // 1. Structured tree — the normal path.
+            val tree = UiAutomation.readScreenTree()
+            if (tree != null) {
+                val useful = tree.countNodes() > 1 ||
+                    tree.text.isNotBlank() ||
+                    tree.contentDescription.isNotBlank() ||
+                    tree.clickable ||
+                    tree.editable
+                if (useful) {
+                    return ToolResult(ok = true, output = tree.toCompactText())
+                }
+            }
+            // 2. Flat text dump — tree empty but text exists.
             val dump = UiAutomation.readScreen()
-            // readScreen() reports an unavailable service as an error
-            // message starting with this prefix; surface it as a failure.
             if (dump.startsWith("Accessibility service not enabled")) {
-                ToolResult(ok = false, output = "", error = NOT_ENABLED_ERROR)
-            } else if (dump.isBlank()) {
-                ToolResult(
+                return ToolResult(ok = false, output = "", error = NOT_ENABLED_ERROR)
+            }
+            if (dump.isNotBlank()) {
+                return ToolResult(
+                    ok = true,
+                    output = "ui_tree empty — text dump:\n$dump",
+                )
+            }
+            // 3. Screenshot fallbacks — no nodes and no text.
+            val screenshotPath = UiAutomation.captureScreenshotToFile()
+            if (screenshotPath != null) {
+                return ToolResult(
+                    ok = true,
+                    output = "No readable UI tree on this screen (WebView / Canvas app). " +
+                        "Screenshot saved to $screenshotPath — describe what you see and tap by coordinates from it.",
+                )
+            }
+            if (MediaProjectionCapture.isReady()) {
+                val file = MediaProjectionCapture.captureToCacheFile()
+                if (file != null) {
+                    return ToolResult(
+                        ok = true,
+                        output = "No readable UI tree on this screen (WebView / Canvas app). " +
+                            "Screenshot saved to ${file.absolutePath} — describe what you see and tap by coordinates from it.",
+                    )
+                }
+                return ToolResult(
                     ok = false,
                     output = "",
-                    error = "No readable text on the current screen",
+                    error = MediaProjectionCapture.lastError
+                        ?: "Screenshot capture failed",
                 )
-            } else {
-                ToolResult(ok = true, output = dump)
             }
+            ToolResult(
+                ok = false,
+                output = "",
+                error = "No readable UI on the current screen (WebView / Canvas / game / map app). " +
+                    "Grant screen-capture permission in Codex settings first, then read the screen again.",
+            )
         } catch (e: Exception) {
             ToolResult(ok = false, output = "", error = e.message ?: "Failed to read screen")
         }
