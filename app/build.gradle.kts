@@ -71,5 +71,11 @@ dependencies {
     androidTestImplementation("androidx.test:rules:1.6.1")
     androidTestImplementation("androidx.test:core:1.6.1")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    // The Compose BOM is declared under implementation, which does not
+    // constrain the androidTest/debug configurations — declare it here too
+    // or the version-less ui-test artifacts resolve to an empty version
+    // (CI run 44514588883: "Could not find androidx.compose.ui:ui-test-junit4:.").
+    androidTestImplementation(platform("androidx.compose:compose-bom:2024.09.00"))
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+    debugImplementation(platform("androidx.compose:compose-bom:2024.09.00"))
 }
