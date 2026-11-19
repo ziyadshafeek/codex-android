@@ -47,13 +47,11 @@ import kotlinx.coroutines.withContext
 /**
  * Intent extra carrying the thread id to open in [MainActivity].
  *
- * NOTE (contract, not yet wired on the receiving side): MainActivity /
- * ChatViewModel do not read this extra yet — they were out of scope for
- * this change. The thread and its first message ARE persisted in
- * codex.db by [ShareActivity] / [createCodexThread], so once the
- * receiving side honours this extra, shared content opens directly in
- * its thread. Until then the app opens normally and the thread is
- * reachable from history.
+ * The receiving side honours it: [MainActivity] reads this extra in
+ * onCreate / onNewIntent and opens the thread via
+ * ChatViewModel.openThread. The thread and its first message ARE
+ * persisted in codex.db by [ShareActivity] / [createCodexThread], so
+ * shared content opens directly in its thread.
  */
 private const val THREAD_ID_EXTRA = "dev.codex.android.extra.THREAD_ID"
 

@@ -147,6 +147,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private var currentThreadId: String? = null
     private val threadMutex = Mutex()
 
+    /**
+     * Set by [openThread] when Share-to-Codex / the QS tile opens an
+     * existing thread. The init restore then skips its message merge
+     * (the opened thread's messages are already loaded wholesale and
+     * must not be mixed with the global recent history).
+     */
+    @Volatile
+    private var openedThreadId: String? = null
+
     init {
         // Key-store warm-up (item 8): the encrypted store is created
         // here on Dispatchers.IO, not on the main thread. _hasKey stays
@@ -204,7 +213,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         }
                         ChatUiMessage(role, stored.content)
                     }
-                    _messages.update { mergeRestored(restored, it) }
+                    _messages.update { current ->
+                        // A thread opened via Share/tile replaces the
+                        // messages wholesale; the global restore must
+                        // not merge other threads' messages into it.
+                        if (openedThreadId != null) current
+                        else mergeRestored(restored, current)
+                    }
                 }
             } catch (e: Exception) {
                 // Never crash on a corrupt memory/skills DB.
@@ -380,6 +395,42 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             currentThreadId = thread.id
             _activeThreadId.value = thread.id
             thread.id
+        }
+    }
+
+    /**
+     * Opens an existing thread (Share-to-Codex, QS tile "New chat"):
+     * loads its stored messages and makes it the current thread. A
+     * no-op when the thread does not exist. Race-proof against the init
+     * restore: the restore's merge is skipped once a thread has been
+     * opened here, and a restore that already ran is overwritten by the
+     * wholesale replace. The thread ids are set under [threadMutex] so
+     * a concurrent [ensureThread] cannot create a second thread for the
+     * same chat. A corrupt DB never crashes the app: the chat simply
+     * stays on its current thread.
+     */
+    fun openThread(threadId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val db = CodexDatabase.getInstance(getApplication())
+                if (db.listThreads().none { it.id == threadId }) return@launch
+                val opened = db.getMessages(threadId).map { stored ->
+                    val role = when (stored.role) {
+                        "user" -> "user"
+                        "assistant" -> "assistant"
+                        else -> "system"
+                    }
+                    ChatUiMessage(role, stored.content)
+                }
+                threadMutex.withLock {
+                    openedThreadId = threadId
+                    currentThreadId = threadId
+                    _activeThreadId.value = threadId
+                }
+                _messages.value = opened
+            } catch (e: Exception) {
+                // Never crash on a corrupt DB.
+            }
         }
     }
 

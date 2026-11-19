@@ -1,5 +1,9 @@
 package dev.codex.android.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -34,6 +38,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import dev.codex.android.agent.AgentRuntime
 import dev.codex.android.voice.VoiceInput
 
@@ -44,6 +49,7 @@ fun ChatScreen(
     onOpenSettings: () -> Unit,
     onOpenHistory: () -> Unit,
     onOpenStore: () -> Unit,
+    onOpenPreview: () -> Unit,
 ) {
     val messages by viewModel.messages.collectAsState()
     val isRunning by viewModel.isRunning.collectAsState()
@@ -94,6 +100,19 @@ fun ChatScreen(
     DisposableEffect(voiceInput) {
         onDispose { voiceInput.destroy() }
     }
+    // Mic permission: request it when ungranted and start listening on
+    // grant; a denial is reported in the voice status line instead of
+    // starting a recogniser that can only fail.
+    val micPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            voiceError = null
+            voiceInput.startListening()
+        } else {
+            voiceError = "Microphone permission is needed for voice input."
+        }
+    }
 
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) {
@@ -111,6 +130,9 @@ fun ChatScreen(
                     }
                     TextButton(onClick = onOpenStore) {
                         Text("Store")
+                    }
+                    TextButton(onClick = onOpenPreview) {
+                        Text("Preview")
                     }
                     TextButton(onClick = onOpenSettings) {
                         Text("Settings")
@@ -240,7 +262,15 @@ fun ChatScreen(
                             voiceInput.stopListening()
                         } else {
                             voiceError = null
-                            voiceInput.startListening()
+                            val granted = ContextCompat.checkSelfPermission(
+                                context,
+                                Manifest.permission.RECORD_AUDIO,
+                            ) == PackageManager.PERMISSION_GRANTED
+                            if (granted) {
+                                voiceInput.startListening()
+                            } else {
+                                micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            }
                         }
                     },
                     modifier = Modifier.padding(start = 4.dp).testTag("chat_mic")
