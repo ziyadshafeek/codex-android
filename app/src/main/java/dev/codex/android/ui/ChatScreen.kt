@@ -21,6 +21,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -29,9 +30,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import dev.codex.android.agent.AgentRuntime
+import dev.codex.android.voice.VoiceInput
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -43,10 +47,53 @@ fun ChatScreen(
 ) {
     val messages by viewModel.messages.collectAsState()
     val isRunning by viewModel.isRunning.collectAsState()
+    val activeThreadId by viewModel.activeThreadId.collectAsState()
     val hasKey by viewModel.hasKey.collectAsState()
     val pending by viewModel.gate.pending.collectAsState()
     val listState = rememberLazyListState()
     var text by remember { mutableStateOf("") }
+
+    // M8 voice input + M1 Stop/Steer composer controls. The composable
+    // calls AgentRuntime directly for stop/steer; the ViewModel-level
+    // stop()/steer() API is a follow-up for integration (ChatViewModel
+    // is not modified here).
+    val context = LocalContext.current
+    var isListening by remember { mutableStateOf(false) }
+    var voicePartial by remember { mutableStateOf("") }
+    var voiceError by remember { mutableStateOf<String?>(null) }
+    val voiceInput = remember(context) {
+        VoiceInput(
+            context = context,
+            listener = object : VoiceInput.Listener {
+                override fun onPartialResult(partial: String) {
+                    voicePartial = partial
+                }
+
+                override fun onFinalResult(transcript: String) {
+                    // Append to whatever the user already typed, never
+                    // replace it.
+                    val clean = transcript.trim()
+                    if (clean.isNotEmpty()) {
+                        text = if (text.isBlank()) clean else "${text.trimEnd()} $clean"
+                    }
+                }
+
+                override fun onError(message: String) {
+                    voiceError = message
+                    isListening = false
+                    voicePartial = ""
+                }
+
+                override fun onListeningChanged(listening: Boolean) {
+                    isListening = listening
+                    if (!listening) voicePartial = ""
+                }
+            }
+        )
+    }
+    DisposableEffect(voiceInput) {
+        onDispose { voiceInput.destroy() }
+    }
 
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) {
@@ -187,16 +234,58 @@ fun ChatScreen(
                     placeholder = { Text("Ask Codex to do something…") },
                     modifier = Modifier.weight(1f).testTag("chat_input")
                 )
+                TextButton(
+                    onClick = {
+                        if (isListening) {
+                            voiceInput.stopListening()
+                        } else {
+                            voiceError = null
+                            voiceInput.startListening()
+                        }
+                    },
+                    modifier = Modifier.padding(start = 4.dp).testTag("chat_mic")
+                ) {
+                    Text(if (isListening) "Listening…" else "Mic")
+                }
+                // M1: Stop is shown ONLY while a run is active.
+                if (isRunning) {
+                    TextButton(
+                        onClick = { activeThreadId?.let { AgentRuntime.stop(it) } },
+                        modifier = Modifier.padding(start = 4.dp).testTag("chat_stop")
+                    ) {
+                        Text("Stop")
+                    }
+                }
                 Button(
                     onClick = {
-                        viewModel.sendGoal(text)
+                        if (isRunning) {
+                            // M1: while a run is active, sending STEERS
+                            // the active run instead of starting a new goal.
+                            activeThreadId?.let { AgentRuntime.steer(it, text) }
+                        } else {
+                            viewModel.sendGoal(text)
+                        }
                         text = ""
                     },
-                    enabled = text.isNotBlank() && !isRunning,
+                    enabled = text.isNotBlank() && (!isRunning || activeThreadId != null),
                     modifier = Modifier.padding(start = 8.dp).testTag("chat_send")
                 ) {
-                    Text("Send")
+                    Text(if (isRunning) "Steer" else "Send")
                 }
+            }
+            // Voice status line: live partial transcript while listening,
+            // or the failure message when recognition degraded gracefully.
+            if (isListening || voiceError != null) {
+                Text(
+                    text = voiceError ?: "Listening… $voicePartial",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp)
+                        .testTag(if (voiceError != null) "voice_error" else "voice_listening"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (voiceError != null) MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }
