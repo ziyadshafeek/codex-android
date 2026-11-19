@@ -8,17 +8,28 @@ import kotlinx.serialization.encodeToString
 import java.io.File
 
 /**
+ * Minimal plan-persistence contract [AgentLoop] depends on. Extracted
+ * from [PlanStore] (BUG 3 follow-up) so the loop is JVM-testable with a
+ * fake repository instead of a real [Context] + files dir.
+ */
+interface PlanRepository {
+    suspend fun loadLatest(): Plan?
+    suspend fun save(plan: Plan)
+    suspend fun clear()
+}
+
+/**
  * Persists the latest [Plan] as JSON in the app's private files dir, so a
  * run resumes exactly where it left off after the process is killed.
  * Never throws — a corrupt or missing file simply yields null on load,
  * and a failed save is swallowed (the in-memory plan still works).
  */
-class PlanStore(context: Context) {
+class PlanStore(context: Context) : PlanRepository {
 
     private val file: File = File(context.filesDir, "codex_latest_plan.json")
 
     /** Loads the most recently saved plan, or null when none exists. */
-    suspend fun loadLatest(): Plan? = withContext(Dispatchers.IO) {
+    override suspend fun loadLatest(): Plan? = withContext(Dispatchers.IO) {
         try {
             if (!file.exists()) return@withContext null
             val raw = file.readText()
@@ -30,7 +41,7 @@ class PlanStore(context: Context) {
     }
 
     /** Saves [plan] as the latest plan. Never throws. */
-    suspend fun save(plan: Plan) = withContext(Dispatchers.IO) {
+    override suspend fun save(plan: Plan) = withContext(Dispatchers.IO) {
         try {
             val raw = CodexJson.encodeToString(Plan.serializer(), plan)
             file.writeText(raw)
@@ -40,7 +51,7 @@ class PlanStore(context: Context) {
     }
 
     /** Clears the saved plan. Never throws. */
-    suspend fun clear() = withContext(Dispatchers.IO) {
+    override suspend fun clear() = withContext(Dispatchers.IO) {
         try {
             if (file.exists()) file.delete()
         } catch (e: Exception) {

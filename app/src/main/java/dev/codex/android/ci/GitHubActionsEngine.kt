@@ -415,10 +415,16 @@ class GitHubActionsEngine(
 
     /** GET .../actions/runs?branch=... — newest first. */
     suspend fun listRuns(owner: String, repo: String, branch: String, perPage: Int = 10): List<WorkflowRun> {
-        val json = getJson(
-            "$apiBaseUrl/repos/$owner/$repo/actions/runs?branch=$branch&per_page=$perPage",
-            "List workflow runs",
-        )
+        // Branch is a query value, not a path segment: build it with
+        // addQueryParameter so branches containing `/` (e.g.
+        // `codex/self-heal`) are encoded instead of breaking the URL.
+        val url = apiBaseUrl.toHttpUrl().newBuilder()
+            .addPathSegments("repos/$owner/$repo/actions/runs")
+            .addQueryParameter("branch", branch)
+            .addQueryParameter("per_page", perPage.toString())
+            .build()
+            .toString()
+        val json = getJson(url, "List workflow runs")
         return (json["workflow_runs"]?.jsonArray ?: emptyList()).mapNotNull { it as? JsonObject }
             .map { parseRun(it) }
     }

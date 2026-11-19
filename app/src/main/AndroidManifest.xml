@@ -19,11 +19,15 @@
     <!-- Voice input (C6): SpeechRecognizer needs RECORD_AUDIO; the runtime
          grant request flow is a separate integration follow-up. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- M3 (App Factory): native APK install needs this; without it the
+         PackageInstaller session + FileProvider install both fail. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.Codex">
@@ -82,6 +86,26 @@
             android:name=".service.TileOverlayActivity"
             android:exported="false"
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <!-- M3 (App Factory): FileProvider serving filesDir/builds/ for the
+             native APK installer (authority <package>.fileprovider must
+             match ApkInstaller.fileProviderAuthority). Not exported. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+        <!-- M3 (App Factory): install-status receiver for the
+             PackageInstaller session API. Not exported: only the
+             system's PackageInstaller sends to it. -->
+        <receiver
+            android:name=".ci.ApkInstallStatusReceiver"
+            android:exported="false" />
 
         <!-- Step 3 (v0.8.0): notification Approve/Deny receiver for
              AgentRuntime approvals. Not exported: only the app's own

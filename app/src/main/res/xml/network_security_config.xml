@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Cleartext is allowed ONLY for localhost / 127.0.0.1: the M7
+     verification browser previews the PRoot dev server over plain HTTP
+     on the loopback interface, and Android blocks cleartext by default
+     on API 28+. No other host is whitelisted — every remote call stays
+     HTTPS. -->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+    </domain-config>
+</network-security-config>

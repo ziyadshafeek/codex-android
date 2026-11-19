@@ -42,7 +42,7 @@ class AgentLoop(
     private val client: OpenAiClient,
     private val tools: ToolRegistry,
     private val gate: ApprovalGate,
-    private val planStore: PlanStore,
+    private val planStore: PlanRepository,
     private val model: String,
     private val skills: List<Skill> = emptyList(),
 ) {
@@ -72,10 +72,26 @@ class AgentLoop(
     }
 
     /**
-     * Runs [goal] to completion. Emits progress events to [events] and
-     * returns the final answer text. Never returns null.
+     * Runs [goal] to completion, sending every [AgentEvent] into [events].
+     * Using a [SendChannel] (backed by an unbounded/buffered [Channel])
+     * guarantees that events emitted before the collector attaches are
+     * never dropped. Returns the final answer text. Never returns null.
      */
-    suspend fun run(goal: String, events: FlowCollector<AgentEvent>): String {
+    suspend fun run(goal: String, events: SendChannel<AgentEvent>): String =
+        runWithSink(goal) { events.send(it) }
+
+    /**
+     * Backwards-compatible overload emitting into a [FlowCollector].
+     * Prefer the [SendChannel] overload so pre-collection events are not
+     * lost.
+     */
+    suspend fun run(goal: String, events: FlowCollector<AgentEvent>): String =
+        runWithSink(goal) { emitEvent(it) }
+
+    private suspend fun runWithSink(
+        goal: String,
+        emitEvent: suspend (AgentEvent) -> Unit,
+    ): String {
         val plan = Plan(
             id = UUID.randomUUID().toString(),
             goal = goal,
@@ -86,7 +102,7 @@ class AgentLoop(
             ),
         )
         planStore.save(plan)
-        events.emit(AgentEvent.PlanCreated(plan))
+        emitEvent(AgentEvent.PlanCreated(plan))
 
         val messages = mutableListOf(
             ChatMessage(role = "system", content = systemPrompt),
@@ -110,19 +126,19 @@ class AgentLoop(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: CodexError) {
-                events.emit(AgentEvent.Error(e))
-                return finishWithError(e, currentPlan, events)
+                emitEvent(AgentEvent.Error(e))
+                return finishWithError(e, currentPlan, emitEvent)
             } catch (e: Exception) {
                 val wrapped = CodexError.Unknown(e.message ?: e.toString(), e)
-                events.emit(AgentEvent.Error(wrapped))
-                return finishWithError(wrapped, currentPlan, events)
+                emitEvent(AgentEvent.Error(wrapped))
+                return finishWithError(wrapped, currentPlan, emitEvent)
             }
 
             val choice = result.choices.firstOrNull()
             if (choice == null) {
                 val error = CodexError.Unknown("The model returned no reply")
-                events.emit(AgentEvent.Error(error))
-                return finishWithError(error, currentPlan, events)
+                emitEvent(AgentEvent.Error(error))
+                return finishWithError(error, currentPlan, emitEvent)
             }
 
             // Record the assistant's turn in history (text and/or tool calls).
@@ -136,7 +152,7 @@ class AgentLoop(
             choice.text?.let { text ->
                 if (text.isNotBlank()) {
                     lastAnswer = text
-                    events.emit(AgentEvent.AssistantText(text))
+                    emitEvent(AgentEvent.AssistantText(text))
                 }
             }
 
@@ -149,8 +165,8 @@ class AgentLoop(
                     .withStepUpdated("act", PlanStepStatus.DONE)
                     .withStepUpdated("answer", PlanStepStatus.DONE)
                 planStore.save(currentPlan)
-                events.emit(AgentEvent.PlanUpdated(currentPlan))
-                events.emit(AgentEvent.Finished(answer))
+                emitEvent(AgentEvent.PlanUpdated(currentPlan))
+                emitEvent(AgentEvent.Finished(answer))
                 return answer
             }
 
@@ -159,7 +175,7 @@ class AgentLoop(
                 val parsed = try {
                     parseToolCall(call, tools)
                 } catch (e: CodexError.MalformedToolCall) {
-                    events.emit(AgentEvent.Error(e))
+                    emitEvent(AgentEvent.Error(e))
                     messages.add(
                         ChatMessage(
                             role = "tool",
@@ -173,7 +189,7 @@ class AgentLoop(
                 val toolName = parsed.tool.name
                 if (SensitivityPolicy.isForbidden(toolName)) {
                     val denial = "Tool '$toolName' is never allowed."
-                    events.emit(
+                    emitEvent(
                         AgentEvent.Error(CodexError.ToolFailed(toolName, denial)),
                     )
                     messages.add(
@@ -186,10 +202,10 @@ class AgentLoop(
                     )
                     continue
                 }
-                events.emit(AgentEvent.ToolStarted(toolName))
-                val output = runToolWithGate(call, parsed, events)
+                emitEvent(AgentEvent.ToolStarted(toolName))
+                val output = runToolWithGate(call, parsed, emitEvent)
                 val outputText = output ?: "(no output)"
-                events.emit(AgentEvent.ToolFinished(toolName, outputText))
+                emitEvent(AgentEvent.ToolFinished(toolName, outputText))
                 messages.add(
                     ChatMessage(
                         role = "tool",
@@ -209,8 +225,8 @@ class AgentLoop(
             .withStepUpdated("act", PlanStepStatus.FAILED, "Turn budget spent")
             .withStepUpdated("answer", PlanStepStatus.DONE)
         planStore.save(currentPlan)
-        events.emit(AgentEvent.PlanUpdated(currentPlan))
-        events.emit(AgentEvent.Finished(answer))
+        emitEvent(AgentEvent.PlanUpdated(currentPlan))
+        emitEvent(AgentEvent.Finished(answer))
         return answer
     }
 
@@ -222,7 +238,7 @@ class AgentLoop(
     private suspend fun runToolWithGate(
         call: ToolCall,
         parsed: dev.codex.android.tools.ParsedToolCall,
-        events: FlowCollector<AgentEvent>,
+        emitEvent: suspend (AgentEvent) -> Unit,
     ): String? {
         val tool = parsed.tool
         if (SensitivityPolicy.requiresApproval(tool)) {
@@ -235,20 +251,20 @@ class AgentLoop(
                     parsed.args,
                 ),
             )
-            events.emit(AgentEvent.ApprovalRequested(action))
+            emitEvent(AgentEvent.ApprovalRequested(action))
             val approved = try {
                 gate.requestApproval(action)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                events.emit(
+                emitEvent(
                     AgentEvent.Error(
                         CodexError.Unknown("Approval failed: ${e.message}"),
                     ),
                 )
                 return "Approval failed: ${e.message}"
             }
-            events.emit(AgentEvent.ApprovalResolved(action, approved))
+            emitEvent(AgentEvent.ApprovalResolved(action, approved))
             if (!approved) {
                 return "The user denied this action."
             }
@@ -270,15 +286,15 @@ class AgentLoop(
     private suspend fun finishWithError(
         error: CodexError,
         plan: Plan,
-        events: FlowCollector<AgentEvent>,
+        emitEvent: suspend (AgentEvent) -> Unit,
     ): String {
         val failed = plan
             .withStepUpdated("act", PlanStepStatus.FAILED, error.message)
             .withStepUpdated("answer", PlanStepStatus.DONE)
         planStore.save(failed)
-        events.emit(AgentEvent.PlanUpdated(failed))
+        emitEvent(AgentEvent.PlanUpdated(failed))
         val answer = "I could not finish: ${error.message}"
-        events.emit(AgentEvent.Finished(answer))
+        emitEvent(AgentEvent.Finished(answer))
         return answer
     }
 }

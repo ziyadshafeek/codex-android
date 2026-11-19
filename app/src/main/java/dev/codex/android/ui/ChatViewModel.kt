@@ -8,7 +8,6 @@ import dev.codex.android.agent.AgentLoop
 import dev.codex.android.agent.AgentRuntime
 import dev.codex.android.agent.PendingApproval
 import dev.codex.android.agent.PlanStore
-import dev.codex.android.agent.channelEventCollector
 import dev.codex.android.api.OkHttpOpenAiClient
 import dev.codex.android.data.CodexDatabase
 import dev.codex.android.data.KeyStore
@@ -28,12 +27,11 @@ import dev.codex.android.tools.ToolResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -75,6 +73,36 @@ internal fun mergeRestored(
     val seenContent = current.map { it.role to it.text }.toSet()
     val kept = restored.filterNot { it.id in seenIds || (it.role to it.text) in seenContent }
     return (kept + current).distinctBy { it.id }
+}
+
+
+/**
+ * Runs [produce] emitting into an unbounded [Channel] while [consume]
+ * processes every event in FIFO order (BUG 3 deep fix). Unlike a
+ * `MutableSharedFlow(replay = 0)`, events emitted before [consume]
+ * begins collecting are buffered and never dropped. Closing the channel
+ * in `finally` and joining the consumer guarantees every emitted event
+ * is delivered before this function returns, while still propagating
+ * consumer failures (e.g. the step-budget `IllegalStateException`) via
+ * structured concurrency.
+ */
+internal suspend fun <T, R> runWithEventChannel(
+    consume: suspend (T) -> Unit,
+    produce: suspend (SendChannel<T>) -> R,
+): R = coroutineScope {
+    val events = Channel<T>(Channel.UNLIMITED)
+    val collector = launch {
+        for (event in events) {
+            consume(event)
+        }
+    }
+    val result = try {
+        produce(events)
+    } finally {
+        events.close()
+    }
+    collector.join()
+    result
 }
 
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
@@ -358,13 +386,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      *   answer the loop's gate with the result.
      * - Every event     → drainSteeringMessages() (step boundary).
      *
-     * The collector is attached BEFORE loop.run() starts emitting, and
-     * events travel through a Channel (BUG 3), which queues anything
-     * emitted before the collector subscribes — so no early event is lost
-     * either way. The step budget is enforced by nextStepOrThrow:
-     * its IllegalStateException fails the collector child, coroutineScope
-     * cancels the loop and rethrows it, and it is recorded in the DB by
-     * AgentRuntime as "Error: Stopped: reached max step budget (N)".
+     * Events travel through runWithEventChannel (BUG 3): its UNLIMITED
+     * Channel queues anything emitted before the consumer attaches, and
+     * the consumer is joined before the run returns, so no early or
+     * trailing event is lost. The step budget is enforced by
+     * nextStepOrThrow: its IllegalStateException fails the consumer
+     * child, the scope cancels the loop and rethrows it, and it is
+     * recorded in the DB by AgentRuntime as
+     * "Error: Stopped: reached max step budget (N)".
      *
      * Streaming caveat: AgentLoop swallows the client's per-token
      * onPartialText (it is a no-op in AgentLoop.run), so AssistantText
@@ -381,17 +410,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         mode: ExecutionMode,
     ): String {
         val db = CodexDatabase.getInstance(getApplication())
-        // BUG 3: a Channel, not a SharedFlow. MutableSharedFlow with
-        // replay=0 buffers NOTHING while nobody collects — the first event
-        // emitted before the collector subscribes is dropped immediately,
-        // however large extraBufferCapacity is. A Channel queues every
+        // BUG 3: events travel through runWithEventChannel (below), not
+        // a SharedFlow — its UNLIMITED Channel queues every
         // pre-collection event in FIFO order and delivers each exactly
-        // once. UNLIMITED (not BUFFERED): the collector does suspending
-        // DB/approval work, and backpressure must never stall the loop
-        // mid-approval; a run is bounded by the step budget, so the queue
-        // stays small.
-        val events = Channel<AgentEvent>(Channel.UNLIMITED)
-        val eventSink = channelEventCollector(events)
+        // once, and the consumer is joined before the run returns.
         val finishedEmitted = AtomicBoolean(false)
         // Approval requests the policy already refused: the policy gate
         // answered them without prompting, so the collector must not open
@@ -417,141 +439,127 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         )
 
         val answer: String = try {
-            coroutineScope {
-                // The collector is attached BEFORE loop.run() starts
-                // emitting, and the Channel queues anything emitted before
-                // it subscribes — so no early event is lost either way.
-                val collector = launch {
-                    events.receiveAsFlow().collect { event ->
-                        // Drain mid-turn steering at every step boundary.
-                        // AgentLoop has no injection point for mid-turn
-                        // messages, so steering cannot steer the current
-                        // run — it is surfaced and recorded for the next
-                        // message instead.
-                        turn.drainSteeringMessages().forEach { msg ->
-                            append(
-                                ChatUiMessage(
-                                    "system",
-                                    "Steering noted: $msg (applies after this run finishes)"
+            val loopAnswer = runWithEventChannel<AgentEvent, String>(
+                consume = { event ->
+                    // Drain mid-turn steering at every step boundary.
+                    // AgentLoop has no injection point for mid-turn
+                    // messages, so steering cannot steer the current
+                    // run — it is surfaced and recorded for the next
+                    // message instead.
+                    turn.drainSteeringMessages().forEach { msg ->
+                        append(
+                            ChatUiMessage(
+                                "system",
+                                "Steering noted: $msg (applies after this run finishes)"
+                            )
+                        )
+                        try {
+                            db.appendMessage(
+                                TimelineMessage(
+                                    threadId = threadId,
+                                    role = "system",
+                                    kind = "text",
+                                    content = "Steering noted: $msg",
                                 )
                             )
-                            try {
-                                db.appendMessage(
-                                    TimelineMessage(
-                                        threadId = threadId,
-                                        role = "system",
-                                        kind = "text",
-                                        content = "Steering noted: $msg",
-                                    )
-                                )
-                            } catch (e: Exception) {
-                                // A timeline failure must never break the run.
-                            }
+                        } catch (e: Exception) {
+                            // A timeline failure must never break the run.
                         }
-                        when (event) {
-                            is AgentEvent.PlanCreated -> {
-                                turn.nextStepOrThrow("Plan: ${event.plan.goal}")
-                                append(ChatUiMessage("system", "Plan started: ${event.plan.goal}"))
-                            }
-                            is AgentEvent.PlanUpdated -> {
-                                // No message.
-                            }
-                            is AgentEvent.AssistantText -> {
-                                turn.nextStepOrThrow("Model reply")
-                                turn.emitAssistantDelta(event.text)
-                                append(ChatUiMessage("assistant", event.text))
-                            }
-                            is AgentEvent.ToolStarted -> {
-                                turn.nextStepOrThrow("Tool: ${event.toolName}")
-                                append(ChatUiMessage("system", "Running ${event.toolName}…"))
-                            }
-                            is AgentEvent.ToolFinished -> {
-                                val output = event.output
-                                val truncated = if (output.length > 300) output.take(300) + "…" else output
-                                append(ChatUiMessage("system", "${event.toolName} → $truncated"))
-                            }
-                            is AgentEvent.ApprovalRequested -> {
-                                // A tool the policy BLOCKs is never opened
-                                // for approval: the policy gate already
-                                // refused it without prompting, so there
-                                // is nothing for the user to approve here.
-                                val decision = AgentRuntime.policy.evaluate(
-                                    threadId,
-                                    event.action.toolName,
-                                    ToolRisk.EXTERNAL_OR_DESTRUCTIVE,
-                                    mode,
-                                )
-                                if (decision == PolicyDecision.BLOCK) {
-                                    blockedApprovalIds += event.action.id
-                                    append(
-                                        ChatUiMessage(
-                                            "system",
-                                            "Blocked by policy: ${event.action.toolName}",
-                                            isError = true,
-                                        )
-                                    )
-                                } else {
-                                    append(
-                                        ChatUiMessage(
-                                            "system",
-                                            "Waiting for your approval: ${event.action.toolName}"
-                                        )
-                                    )
-                                    val approved = turn.requestApproval(
-                                        event.action.toolName,
-                                        event.action.description,
-                                        event.action.argsJson,
-                                    )
-                                    gate.answer(event.action.id, approved)
-                                }
-                            }
-                            is AgentEvent.ApprovalResolved -> {
-                                if (event.action.id in blockedApprovalIds) {
-                                    blockedApprovalIds -= event.action.id
-                                    // Already reported as "Blocked by
-                                    // policy" above; this is not a user
-                                    // denial.
-                                } else {
-                                    append(
-                                        ChatUiMessage(
-                                            "system",
-                                            "You ${if (event.approved) "approved" else "denied"} ${event.action.toolName}"
-                                        )
-                                    )
-                                }
-                            }
-                            is AgentEvent.Error ->
+                    }
+                    when (event) {
+                        is AgentEvent.PlanCreated -> {
+                            turn.nextStepOrThrow("Plan: ${event.plan.goal}")
+                            append(ChatUiMessage("system", "Plan started: ${event.plan.goal}"))
+                        }
+                        is AgentEvent.PlanUpdated -> {
+                            // No message.
+                        }
+                        is AgentEvent.AssistantText -> {
+                            turn.nextStepOrThrow("Model reply")
+                            turn.emitAssistantDelta(event.text)
+                            append(ChatUiMessage("assistant", event.text))
+                        }
+                        is AgentEvent.ToolStarted -> {
+                            turn.nextStepOrThrow("Tool: ${event.toolName}")
+                            append(ChatUiMessage("system", "Running ${event.toolName}…"))
+                        }
+                        is AgentEvent.ToolFinished -> {
+                            val output = event.output
+                            val truncated = if (output.length > 300) output.take(300) + "…" else output
+                            append(ChatUiMessage("system", "${event.toolName} → $truncated"))
+                        }
+                        is AgentEvent.ApprovalRequested -> {
+                            // A tool the policy BLOCKs is never opened
+                            // for approval: the policy gate already
+                            // refused it without prompting, so there
+                            // is nothing for the user to approve here.
+                            val decision = AgentRuntime.policy.evaluate(
+                                threadId,
+                                event.action.toolName,
+                                ToolRisk.EXTERNAL_OR_DESTRUCTIVE,
+                                mode,
+                            )
+                            if (decision == PolicyDecision.BLOCK) {
+                                blockedApprovalIds += event.action.id
                                 append(
                                     ChatUiMessage(
-                                        "assistant",
-                                        "Error: ${event.error.message}",
-                                        isError = true
+                                        "system",
+                                        "Blocked by policy: ${event.action.toolName}",
+                                        isError = true,
                                     )
                                 )
-                            is AgentEvent.Finished -> {
-                                finishedEmitted.set(true)
-                                append(ChatUiMessage("assistant", event.answer))
+                            } else {
+                                append(
+                                    ChatUiMessage(
+                                        "system",
+                                        "Waiting for your approval: ${event.action.toolName}"
+                                    )
+                                )
+                                val approved = turn.requestApproval(
+                                    event.action.toolName,
+                                    event.action.description,
+                                    event.action.argsJson,
+                                )
+                                gate.answer(event.action.id, approved)
                             }
                         }
+                        is AgentEvent.ApprovalResolved -> {
+                            if (event.action.id in blockedApprovalIds) {
+                                blockedApprovalIds -= event.action.id
+                                // Already reported as "Blocked by
+                                // policy" above; this is not a user
+                                // denial.
+                            } else {
+                                append(
+                                    ChatUiMessage(
+                                        "system",
+                                        "You ${if (event.approved) "approved" else "denied"} ${event.action.toolName}"
+                                    )
+                                )
+                            }
+                        }
+                        is AgentEvent.Error ->
+                            append(
+                                ChatUiMessage(
+                                    "assistant",
+                                    "Error: ${event.error.message}",
+                                    isError = true
+                                )
+                            )
+                        is AgentEvent.Finished -> {
+                            finishedEmitted.set(true)
+                            append(ChatUiMessage("assistant", event.answer))
+                        }
                     }
-                }
-                try {
-                    val loopAnswer = loop.run(goal, eventSink)
-                    // Give the collector a brief chance to deliver a Finished
-                    // event that was emitted just before run() returned.
-                    for (i in 0 until 20) {
-                        if (finishedEmitted.get()) break
-                        delay(10)
-                    }
-                    if (!finishedEmitted.get() && loopAnswer.isNotBlank()) {
-                        append(ChatUiMessage("assistant", loopAnswer))
-                    }
-                    loopAnswer
-                } finally {
-                    collector.cancel()
-                    events.close()
-                }
+                },
+                produce = { events ->
+                    loop.run(goal, events)
+                },
+            )
+            if (!finishedEmitted.get() && loopAnswer.isNotBlank()) {
+                append(ChatUiMessage("assistant", loopAnswer))
             }
+            loopAnswer
         } catch (e: IllegalStateException) {
             // The step-budget throw from nextStepOrThrow (a collector
             // child failure, rethrown by coroutineScope) — or any other
