@@ -393,6 +393,7 @@ class MultiProviderEngineTest {
                         .protocol(Protocol.HTTP_1_1)
                         .code(200)
                         .message("fake")
+                        .header("Content-Type", "text/event-stream")
                         .body(sseText.toResponseBody("text/event-stream".toMediaType()))
                         .build()
                 },
