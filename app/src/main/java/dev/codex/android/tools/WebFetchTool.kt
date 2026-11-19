@@ -11,6 +11,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
+import okhttp3.Dns
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
@@ -49,7 +50,32 @@ class WebFetchTool internal constructor(
         dnsResolver = { host -> InetAddress.getAllByName(host).toList() },
     )
 
-    private val client: OkHttpClient = httpClient.newBuilder()
+    /**
+     * Pinned DNS: every OkHttp connection resolves through the SAME injected
+     * resolver the SSRF validator uses, and the lookup itself refuses any
+     * blocked address. Without this, validation and the connection resolve
+     * independently (platform DNS vs [dnsResolver]) and a rebinding answer
+     * can return public to the validator and private to OkHttp (DNS TOCTOU).
+     * With the pin, an address OkHttp connects to was checked in the same
+     * lookup that produced it — a lookup that returns a blocked address
+     * throws instead of connecting. Literal-IP hosts never reach DNS at all
+     * (OkHttp uses the parsed address directly); those are refused by
+     * [validateSafeTarget] before any call is made.
+     */
+    internal val pinnedDns: Dns = Dns { host ->
+        val resolved = dnsResolver(host)
+        for (addr in resolved) {
+            if (isBlockedInetAddress(addr)) {
+                throw UnknownHostException(
+                    "SSRF protection: host '$host' resolved to disallowed address ${addr.hostAddress}",
+                )
+            }
+        }
+        resolved
+    }
+
+    internal val client: OkHttpClient = httpClient.newBuilder()
+        .dns(pinnedDns)
         .connectTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .readTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .writeTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)

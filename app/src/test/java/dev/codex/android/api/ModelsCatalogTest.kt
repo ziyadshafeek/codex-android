@@ -240,4 +240,155 @@ class ModelsCatalogTest {
         assertEquals(10.0, model.outputPricePerMillionUsd!!, 1e-9)
         assertTrue(model.supportsTools)
     }
+
+    @Test
+    fun refresh_malformedSnapshotJson_returnsEmptyCatalog() = runBlocking {
+        val failingClient = fakeClient { throw IOException("No network") }
+        val catalog = ModelsCatalog(
+            client = failingClient,
+            cacheDir = cacheDir,
+            snapshotLoader = { "{not valid json" },
+        )
+
+        assertFalse(catalog.refresh())
+        assertNull(catalog.lookup("gpt-4o"))
+        assertTrue(catalog.all().isEmpty())
+        assertTrue(catalog.providers().isEmpty())
+    }
+
+    @Test
+    fun refresh_missingSnapshotAsset_returnsEmptyCatalog() = runBlocking {
+        val failingClient = fakeClient { throw IOException("No network") }
+        val catalog = ModelsCatalog(
+            client = failingClient,
+            cacheDir = cacheDir,
+            snapshotLoader = { null },
+        )
+
+        assertFalse(catalog.refresh())
+        assertNull(catalog.lookup("gpt-4o"))
+        assertTrue(catalog.all().isEmpty())
+    }
+
+    @Test
+    fun refresh_serverError500_fallsBackToSnapshot() = runBlocking {
+        val client = fakeClient { req -> response(req, 500, "") }
+        val catalog = ModelsCatalog(
+            client = client,
+            cacheDir = cacheDir,
+            snapshotLoader = { readBundledSnapshot() },
+        )
+
+        assertFalse(catalog.refresh())
+        assertNotNull(catalog.lookup("gpt-4o"))
+    }
+
+    @Test
+    fun refresh_empty200Body_fallsBackToSnapshot() = runBlocking {
+        val client = fakeClient { req -> response(req, 200, "") }
+        val catalog = ModelsCatalog(
+            client = client,
+            cacheDir = cacheDir,
+            snapshotLoader = { readBundledSnapshot() },
+        )
+
+        assertFalse(catalog.refresh())
+        assertNotNull(catalog.lookup("gpt-4o"))
+        assertNotNull(catalog.lookup("claude-sonnet-4-5"))
+    }
+
+    @Test
+    fun refresh_expiredCache_serverReturnsNewBody_replacesCache() = runBlocking {
+        var nowMs = 1_000_000L
+        val newBody = """
+            {
+              "openai": {
+                "id": "openai",
+                "models": {
+                  "gpt-5": {
+                    "id": "gpt-5",
+                    "name": "GPT-5",
+                    "tool_call": true,
+                    "cost": { "input": 1.25, "output": 10.0 },
+                    "limit": { "context": 400000 }
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+        val client = fakeClient { req ->
+            if (req.header("If-None-Match") == "\"v1\"") {
+                response(req, 200, newBody, etag = "\"v2\"")
+            } else {
+                response(req, 200, cannedApiJson, etag = "\"v1\"")
+            }
+        }
+        val catalog = ModelsCatalog(
+            client = client,
+            cacheDir = cacheDir,
+            snapshotLoader = { readBundledSnapshot() },
+            clockMs = { nowMs },
+        )
+
+        assertTrue(catalog.refresh())
+        assertNotNull(catalog.lookup("gpt-4o"))
+
+        // Past the 24 h TTL the stale ETag does not 304 — the new body wins.
+        nowMs += TimeUnit.HOURS.toMillis(25)
+        assertTrue(catalog.refresh())
+        assertNotNull(catalog.lookup("gpt-5"))
+        assertNull(catalog.lookup("gpt-4o"))
+        assertEquals(listOf("openai"), catalog.providers())
+    }
+
+    @Test
+    fun lookup_caseInsensitiveAndPrefersFirstPartyOnBareCollision() = runBlocking {
+        val collidingJson = """
+            {
+              "openrouter": {
+                "id": "openrouter",
+                "models": {
+                  "gpt-x": {
+                    "id": "gpt-x",
+                    "name": "GPT-X via OpenRouter",
+                    "tool_call": false,
+                    "limit": { "context": 64000 }
+                  }
+                }
+              },
+              "openai": {
+                "id": "openai",
+                "models": {
+                  "gpt-x": {
+                    "id": "gpt-x",
+                    "name": "GPT-X",
+                    "tool_call": true,
+                    "limit": { "context": 128000 }
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+        val client = fakeClient { req -> response(req, 200, collidingJson) }
+        val catalog = ModelsCatalog(
+            client = client,
+            cacheDir = cacheDir,
+            snapshotLoader = { readBundledSnapshot() },
+        )
+
+        assertTrue(catalog.refresh())
+        // Bare id resolves to the first-party provider, not the aggregator.
+        val bare = catalog.lookup("gpt-x")
+        assertNotNull(bare)
+        assertEquals("openai", bare!!.providerId)
+        assertEquals(128000, bare.contextWindow)
+        // Case-insensitive bare lookup finds the same entry.
+        assertEquals(bare, catalog.lookup("GPT-X"))
+        assertEquals(bare, catalog.lookup("OpenAI/GPT-X"))
+        // Qualified lookup still reaches the aggregator's copy.
+        val routed = catalog.lookup("openrouter/gpt-x")
+        assertNotNull(routed)
+        assertEquals("openrouter", routed!!.providerId)
+        assertEquals(64000, routed.contextWindow)
+    }
 }

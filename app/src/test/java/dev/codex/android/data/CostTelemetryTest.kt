@@ -1,6 +1,9 @@
 package dev.codex.android.data
 
 import dev.codex.android.core.CodexJson
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import org.junit.After
@@ -241,6 +244,89 @@ class CostTelemetryTest {
             assertEquals(1L, remaining.calls)
         } finally {
             third.close()
+        }
+    }
+
+    @Test
+    fun record_clampsNegativeAndNonFiniteValues() {
+        val telemetry = CostTelemetry(InMemoryCostUsageStore())
+        try {
+            telemetry.record("t1", "gpt-4o", -5L, -10L, Double.NaN)
+            telemetry.record("t1", "gpt-4o", 100L, 50L, -1.0)
+            telemetry.record("t1", "gpt-4o", 100L, 50L, Double.POSITIVE_INFINITY)
+            val totals = telemetry.totalsForThread("t1")
+            assertEquals(200L, totals.inputTokens)
+            assertEquals(100L, totals.outputTokens)
+            assertEquals(0.0, totals.costUsd, 1e-9)
+            assertEquals(3L, totals.calls)
+        } finally {
+            telemetry.close()
+        }
+    }
+
+    @Test
+    fun record_concurrentRecordsFromManyThreads_aggregateExactly() {
+        val telemetry = CostTelemetry(InMemoryCostUsageStore())
+        try {
+            runBlocking {
+                val jobs = (0 until 8).map {
+                    launch(Dispatchers.Default) {
+                        repeat(50) { telemetry.record("shared", "gpt-4o", 10L, 5L, 0.001) }
+                    }
+                }
+                jobs.forEach { it.join() }
+            }
+            telemetry.awaitIdle()
+            val totals = telemetry.totalsForThread("shared")
+            assertEquals(4_000L, totals.inputTokens)
+            assertEquals(2_000L, totals.outputTokens)
+            assertEquals(0.4, totals.costUsd, 1e-9)
+            assertEquals(400L, totals.calls)
+            assertEquals(totals, telemetry.totalsAll())
+        } finally {
+            telemetry.close()
+        }
+    }
+
+    @Test
+    fun recordAfterClear_onlyPostClearRecordsCount() {
+        val telemetry = CostTelemetry(InMemoryCostUsageStore())
+        try {
+            telemetry.record("t1", "gpt-4o", 1_000L, 400L, 0.01)
+            telemetry.clearThread("t1")
+            telemetry.record("t1", "gpt-4o", 500L, 200L, 0.005)
+
+            // Immediately visible: only the post-clear record counts.
+            assertEquals(
+                UsageTotals(500L, 200L, 0.005, 1L),
+                telemetry.totalsForThread("t1"),
+            )
+            telemetry.awaitIdle()
+            assertEquals(
+                UsageTotals(500L, 200L, 0.005, 1L),
+                telemetry.totalsForThread("t1"),
+            )
+        } finally {
+            telemetry.close()
+        }
+    }
+
+    @Test
+    fun record_emptyThreadId_isTrackedSeparately() {
+        val telemetry = CostTelemetry(InMemoryCostUsageStore())
+        try {
+            telemetry.record("", "gpt-4o", 100L, 50L, 0.002)
+            telemetry.record("t1", "gpt-4o", 200L, 100L, 0.004)
+            assertEquals(
+                UsageTotals(100L, 50L, 0.002, 1L),
+                telemetry.totalsForThread(""),
+            )
+            assertEquals(
+                UsageTotals(300L, 150L, 0.006, 2L),
+                telemetry.totalsAll(),
+            )
+        } finally {
+            telemetry.close()
         }
     }
 }

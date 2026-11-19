@@ -1,6 +1,9 @@
 package dev.codex.android.tools
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
@@ -116,5 +119,91 @@ class TodoToolsTest {
             }
         }
         assertFalse(writeTool.execute(blankContent).ok)
+    }
+
+    @Test
+    fun sanitizeThreadId_edges() {
+        assertEquals(TodoStore.DEFAULT_THREAD_ID, TodoStore.sanitizeThreadId(""))
+        assertEquals(TodoStore.DEFAULT_THREAD_ID, TodoStore.sanitizeThreadId("   "))
+        // Path traversal collapses to underscores, then to the default.
+        assertEquals(TodoStore.DEFAULT_THREAD_ID, TodoStore.sanitizeThreadId("../.."))
+        assertEquals(TodoStore.DEFAULT_THREAD_ID, TodoStore.sanitizeThreadId("///"))
+        assertEquals("a_b", TodoStore.sanitizeThreadId("a/b"))
+        assertEquals("thr", TodoStore.sanitizeThreadId("thr αβ"))
+        assertEquals("a--b__c", TodoStore.sanitizeThreadId("a--b__c"))
+        assertEquals("spaced", TodoStore.sanitizeThreadId("  spaced  "))
+        assertEquals("UPPER_lower-1", TodoStore.sanitizeThreadId("UPPER_lower-1"))
+    }
+
+    @Test
+    fun write_emptyList_clearsToNoTodos() = runBlocking {
+        val store = TodoStore(tempDir)
+        val writeTool = TodoWriteTool(store) { "thr_alpha" }
+        val readTool = TodoReadTool(store) { "thr_alpha" }
+
+        val writeArgs = buildJsonObject {
+            putJsonArray("todos") {
+                add(buildJsonObject { put("content", "One task"); put("status", "pending") })
+            }
+        }
+        assertTrue(writeTool.execute(writeArgs).ok)
+
+        val clearArgs = buildJsonObject { putJsonArray("todos") {} }
+        val cleared = writeTool.execute(clearArgs)
+        assertTrue(cleared.ok)
+        assertEquals("No todos.", cleared.output)
+        assertEquals("No todos.", readTool.execute(buildJsonObject {}).output)
+    }
+
+    @Test
+    fun read_corruptJsonFile_returnsEmptyNotCrash() = runBlocking {
+        File(tempDir, "todos_thr_alpha.json").writeText("{corrupt json", Charsets.UTF_8)
+        val store = TodoStore(tempDir)
+        val readTool = TodoReadTool(store) { "thr_alpha" }
+        assertEquals("No todos.", readTool.execute(buildJsonObject {}).output)
+    }
+
+    @Test
+    fun write_rejectsMissingTodosAndNonObjectItems() = runBlocking {
+        val store = TodoStore(tempDir)
+        val writeTool = TodoWriteTool(store)
+
+        val missing = buildJsonObject { put("other", "field") }
+        val missingResult = writeTool.execute(missing)
+        assertFalse(missingResult.ok)
+        assertTrue(missingResult.error!!.contains("Missing required argument: todos"))
+
+        val nonObject = buildJsonObject {
+            putJsonArray("todos") { add(JsonPrimitive("not-an-object")) }
+        }
+        val nonObjectResult = writeTool.execute(nonObject)
+        assertFalse(nonObjectResult.ok)
+        assertTrue(nonObjectResult.error!!.contains("must be a JSON object"))
+    }
+
+    @Test
+    fun concurrentWrites_differentThreadsStayIsolated() = runBlocking {
+        val store = TodoStore(tempDir)
+        val jobs = (0 until 10).map { n ->
+            launch(Dispatchers.Default) {
+                val writeTool = TodoWriteTool(store) { "thr_$n" }
+                val args = buildJsonObject {
+                    putJsonArray("todos") {
+                        add(buildJsonObject { put("content", "Task $n"); put("status", "pending") })
+                        add(buildJsonObject { put("content", "Task $n-b"); put("status", "completed") })
+                    }
+                }
+                assertTrue(writeTool.execute(args).ok)
+            }
+        }
+        jobs.forEach { it.join() }
+
+        for (n in 0 until 10) {
+            val readTool = TodoReadTool(store) { "thr_$n" }
+            assertEquals(
+                "1. [pending] Task $n\n2. [completed] Task $n-b",
+                readTool.execute(buildJsonObject {}).output,
+            )
+        }
     }
 }

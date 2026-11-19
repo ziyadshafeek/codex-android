@@ -71,4 +71,93 @@ class QuestionToolTest {
         assertFalse(QuestionTool.execute(emptyOptions).ok)
         assertTrue(PendingQuestions.listPending().isEmpty())
     }
+
+    @Test
+    fun execute_rejectsNonStringOptionsAndFiltersBlankEntries() = runBlocking {
+        // A non-string option entry is rejected outright.
+        val nonString = buildJsonObject {
+            put("question", "Pick one")
+            putJsonArray("options") { add(JsonPrimitive(42)) }
+        }
+        assertFalse(QuestionTool.execute(nonString).ok)
+        assertTrue(PendingQuestions.listPending().isEmpty())
+
+        // Blank entries are filtered; at least one real option remains.
+        val withBlanks = buildJsonObject {
+            put("question", "Pick one")
+            putJsonArray("options") {
+                add(JsonPrimitive("Yes"))
+                add(JsonPrimitive("   "))
+                add(JsonPrimitive(""))
+            }
+        }
+        val okResult = QuestionTool.execute(withBlanks)
+        assertTrue(okResult.ok)
+        val id = okResult.output.removePrefix("QUESTION_QUEUED:")
+        assertEquals(listOf("Yes"), PendingQuestions.get(id)?.options)
+
+        // All-blank options leave nothing to choose.
+        val allBlank = buildJsonObject {
+            put("question", "Pick one")
+            putJsonArray("options") {
+                add(JsonPrimitive("   "))
+                add(JsonPrimitive(""))
+            }
+        }
+        assertFalse(QuestionTool.execute(allBlank).ok)
+    }
+
+    @Test
+    fun answer_rejectsBlankAndUnknownIds() = runBlocking {
+        val args = buildJsonObject {
+            put("question", "Continue?")
+            putJsonArray("options") { add(JsonPrimitive("Yes")) }
+        }
+        val id = QuestionTool.execute(args).output.removePrefix("QUESTION_QUEUED:")
+
+        assertFalse(PendingQuestions.answer("no-such-id", "Yes"))
+        assertFalse(PendingQuestions.answer(id, "   "))
+        assertEquals(null, PendingQuestions.get("no-such-id"))
+        // The real question is still unanswered after the rejected attempts.
+        assertEquals(1, PendingQuestions.listPending().size)
+    }
+
+    @Test
+    fun pending_fifoOrderAcrossMultipleQuestions() = runBlocking {
+        fun enqueue(question: String): String {
+            val args = buildJsonObject {
+                put("question", question)
+                putJsonArray("options") { add(JsonPrimitive("OK")) }
+            }
+            return QuestionTool.execute(args).output.removePrefix("QUESTION_QUEUED:")
+        }
+
+        val first = enqueue("First?")
+        val second = enqueue("Second?")
+        val third = enqueue("Third?")
+
+        assertEquals(
+            listOf(first, second, third),
+            PendingQuestions.listPending().map { it.id },
+        )
+        assertTrue(PendingQuestions.answer(second, "OK"))
+        assertEquals(
+            listOf(first, third),
+            PendingQuestions.listPending().map { it.id },
+        )
+    }
+
+    @Test
+    fun remove_deletesQuestion() = runBlocking {
+        val args = buildJsonObject {
+            put("question", "Delete me?")
+            putJsonArray("options") { add(JsonPrimitive("OK")) }
+        }
+        val id = QuestionTool.execute(args).output.removePrefix("QUESTION_QUEUED:")
+
+        assertTrue(PendingQuestions.remove(id))
+        assertEquals(null, PendingQuestions.get(id))
+        assertTrue(PendingQuestions.listPending().isEmpty())
+        assertFalse(PendingQuestions.remove(id))
+    }
 }
