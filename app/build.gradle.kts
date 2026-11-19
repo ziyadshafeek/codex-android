@@ -29,6 +29,20 @@ android {
         }
     }
 
+    packaging {
+        // PRoot binaries are packaged as .so files so the package manager
+        // extracts them to nativeLibraryDir with execute permission
+        // (SELinux-compliant execve() on targetSdk >= 29).
+        jniLibs { useLegacyPackaging = true }
+    }
+    androidComponents {
+        onVariants { variant ->
+            // Keep debug symbols for the PRoot native binaries.
+            // (No libbusybox.so: there is no host-side BusyBox artifact in H2.)
+            variant.packaging.keepDebugSymbols += listOf("**/libproot*.so")
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -54,6 +68,12 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // Termux terminal emulator + view (Apache-2.0) via JitPack (see settings.gradle.kts).
+    // Modules built from the termux-app v0.118.1 tag.
+    implementation("com.github.termux.termux-app:terminal-emulator:v0.118.1")
+    implementation("com.github.termux.termux-app:terminal-view:v0.118.1")
+    // XZ for Java (public domain) — in-app decompression of the Termux proot .deb's data.tar.xz.
+    implementation("org.tukaani:xz:1.9")
     // kotlinx-serialization 1.6.3 is the newest runtime compatible with
     // Kotlin 1.9.25; 1.7.3 requires Kotlin 2.0.0+ (CI run 44345429591).
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
