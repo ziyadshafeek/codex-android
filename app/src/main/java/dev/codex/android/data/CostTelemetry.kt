@@ -92,6 +92,13 @@ private class SqliteCostUsageStore(context: Context) :
         // v1 initial schema.
     }
 
+    // Both SQLiteOpenHelper and CostUsageStore declare close(): override it
+    // explicitly so the call is unambiguous; the helper's close is the one
+    // that releases the database.
+    override fun close() {
+        super<SQLiteOpenHelper>.close()
+    }
+
     override fun insert(record: CostUsageRecord) {
         val values = ContentValues().apply {
             put("thread_id", record.threadId)

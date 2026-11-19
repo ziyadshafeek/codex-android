@@ -20,8 +20,9 @@ data class GlobRule(
  *
  * Glob syntax (case-sensitive):
  * - `*` matches any sequence of characters except `/`.
- * - `**` matches any sequence of characters including `/` (and `**/` matches
- *   zero or more leading/intermediate directory segments).
+ * - `**` matches any sequence of characters including `/` (and a double
+ *   star followed by `/` matches zero or more leading/intermediate
+ *   directory segments).
  * - `?` matches any single character except `/`.
  *
  * [intersect] composes parent and child engines immutably so a child engine
