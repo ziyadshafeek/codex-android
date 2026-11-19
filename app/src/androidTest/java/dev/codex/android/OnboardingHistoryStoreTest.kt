@@ -1,6 +1,6 @@
 package dev.codex.android
 
-import androidx.compose.ui.test.assertDoesNotExist
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -204,7 +204,7 @@ class OnboardingHistoryStoreTest {
         // No runs have ever been sent, so the empty state shows.
         composeTestRule.onNodeWithTag("history_empty").assertIsDisplayed()
         composeTestRule.onNodeWithText("No past runs yet.").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("history_list").assertDoesNotExist()
+        composeTestRule.onAllNodesWithTag("history_list").assertCountEquals(0)
 
         backToChat()
     }
@@ -284,8 +284,8 @@ class OnboardingHistoryStoreTest {
         composeTestRule.onNodeWithText("Test Counter").performScrollTo()
         composeTestRule.onNodeWithText("Test Counter").assertIsDisplayed()
         composeTestRule.onNodeWithText("A test counter app").assertIsDisplayed()
-        composeTestRule.onNodeWithText("Nothing waiting for approval.")
-            .assertDoesNotExist()
+        composeTestRule.onAllNodesWithText("Nothing waiting for approval.")
+            .assertCountEquals(0)
 
         backToChat()
     }
@@ -329,7 +329,7 @@ class OnboardingHistoryStoreTest {
         }
         composeTestRule.onNodeWithText("Approved Test App").performScrollTo()
         composeTestRule.onNodeWithText("Approved Test App").assertIsDisplayed()
-        composeTestRule.onNodeWithText("No apps listed yet.").assertDoesNotExist()
+        composeTestRule.onAllNodesWithText("No apps listed yet.").assertCountEquals(0)
 
         composeTestRule.onNodeWithText("Buy").performClick()
 
@@ -341,8 +341,8 @@ class OnboardingHistoryStoreTest {
         composeTestRule.onNodeWithText("Payments are not live yet")
             .assertIsDisplayed()
         composeTestRule.onNodeWithText("OK").performClick()
-        composeTestRule.onNodeWithText("Payments are not live yet")
-            .assertDoesNotExist()
+        composeTestRule.onAllNodesWithText("Payments are not live yet")
+            .assertCountEquals(0)
 
         backToChat()
     }

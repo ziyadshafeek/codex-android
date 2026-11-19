@@ -1,11 +1,10 @@
 package dev.codex.android
 
 import androidx.compose.ui.semantics.SemanticsProperties
-import androidx.compose.ui.test.assertDoesNotExist
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
-import androidx.compose.ui.test.fetchSemanticsNode
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
@@ -173,7 +172,7 @@ class ChatSettingsTest {
         composeTestRule.onNodeWithTag("chat_input")
             .assertTextEquals("What time is it?")
         composeTestRule.onNodeWithTag("empty_state_title").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("chat_messages").assertDoesNotExist()
+        composeTestRule.onAllNodesWithTag("chat_messages").assertCountEquals(0)
     }
 
     @Test
@@ -217,8 +216,8 @@ class ChatSettingsTest {
 
         composeTestRule.onNodeWithTag("chat_input").assertIsDisplayed()
         composeTestRule.onNodeWithTag("chat_send").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("settings_base_url")
-            .assertDoesNotExist()
+        composeTestRule.onAllNodesWithTag("settings_base_url")
+            .assertCountEquals(0)
     }
 
     @Test
@@ -242,7 +241,7 @@ class ChatSettingsTest {
         // The fake key must not appear anywhere on screen (the field also
         // masks input with PasswordVisualTransformation, so the literal
         // value can never be shown as text).
-        composeTestRule.onNodeWithText(FAKE_KEY).assertDoesNotExist()
+        composeTestRule.onAllNodesWithText(FAKE_KEY).assertCountEquals(0)
         // Stronger check on the field itself: its editable text is empty.
         val editableText = composeTestRule.onNodeWithTag("settings_api_key")
             .fetchSemanticsNode()
