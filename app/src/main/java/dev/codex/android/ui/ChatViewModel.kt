@@ -48,6 +48,9 @@ data class HistoryEntry(val text: String, val createdAtMillis: Long)
 
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
+    // KeyStore's constructor does no I/O (prefs resolve lazily from a
+    // process-wide cache — item 8), so this field initialiser is cheap
+    // on the main thread; the store is warmed on IO in init below.
     val keyStore: KeyStore = KeyStore(application)
     private val planStore: PlanStore = PlanStore(application)
     private val registry: ToolRegistry = ToolRegistry.withBuiltins(application)
@@ -86,7 +89,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val threadMutex = Mutex()
 
     init {
-        refreshKeyState()
+        // Key-store warm-up (item 8): the encrypted store is created
+        // here on Dispatchers.IO, not on the main thread. _hasKey stays
+        // false — banner shown — until this refresh lands, which is the
+        // correct default when no key is set, so the no-key flow is
+        // unaffected.
+        viewModelScope.launch(Dispatchers.IO) {
+            KeyStore.warmUp(getApplication<Application>())
+            refreshKeyState()
+        }
         viewModelScope.launch {
             try {
                 planStore.loadLatest()?.let { plan ->
@@ -145,6 +156,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _messages.update { it + message }
     }
 
+    /**
+     * Records a sent goal in this session's History (item 3): _history
+     * was only seeded in init, so a goal sent this session never
+     * appeared until the next launch. Newest first, de-duplicated by
+     * text (a repeat moves to the top, as the init seeding does), capped
+     * at 50 — mirroring the init seeding and the memory save in
+     * sendGoal, which also records no-key goals.
+     */
+    private fun recordHistory(goal: String) {
+        val entry = HistoryEntry(goal, System.currentTimeMillis())
+        _history.update { current ->
+            (listOf(entry) + current.filter { it.text != goal }).take(50)
+        }
+    }
+
     fun refreshKeyState() {
         // Both halves are required: a key alone is not enough, since a
         // run still needs a base URL to call.
@@ -179,6 +205,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun sendGoal(goal: String) {
         if (goal.isBlank()) return
         if (_isRunning.value) return
+        // History for this session (item 3): record the goal now, before
+        // either the no-key or the running branch — the memory save
+        // below does the same. A refused double-tap re-records the same
+        // text, which recordHistory de-duplicates, so no duplicate row.
+        recordHistory(goal)
         // Fire-and-forget: a memory failure must never affect the chat.
         viewModelScope.launch(Dispatchers.IO) {
             try {
