@@ -84,14 +84,20 @@ dependencies {
     // vendored in source. Used by editor/SoraEditorScreen.kt (CodeEditor,
     // SchemeDarcula, EditorSearcher). No new repository needed: Maven Central
     // is a default repository.
-    // Coordinate correction (CI run 44627663684): the staged
+    // Coordinate history (2026-11-19): the staged
     // io.github.rosemoe.sora:editor:0.24.3 does not exist — Maven Central has
-    // no group io.github.rosemoe.sora at all, and no 0.24.3 anywhere. The
-    // real group is io.github.Rosemoe.sora-editor (capital R) and 0.23.6 is
-    // the newest version on Central (verified via search.maven.org
-    // 2026-11-19). The Java package inside the AAR is still
-    // io.github.rosemoe.sora.*, so SoraEditorScreen.kt imports are unchanged.
-    implementation("io.github.Rosemoe.sora-editor:editor:0.23.6")
+    // no group io.github.rosemoe.sora at all, and no 0.24.3 anywhere (CI run
+    // 44627663684: Central 404, then JitPack 401 aborted resolution). The real
+    // group is io.github.Rosemoe.sora-editor (capital R). 0.23.6 (newest on
+    // Central) was then tried and failed CI run 44628565583: it is built with
+    // Kotlin 2.1.21, whose 2.1.0 metadata the pinned Kotlin 1.9.25 compiler
+    // cannot read. 0.23.5 is the newest Sora release built with Kotlin 1.9.x
+    // (1.9.23, per the sora-editor repo's version catalog at tag 0.23.5), so
+    // it is the newest version compatible with this project's Kotlin 1.9.25
+    // pin. Do NOT upgrade past 0.23.5 without also upgrading Kotlin. The Java
+    // package inside the AAR is io.github.rosemoe.sora.*, so
+    // SoraEditorScreen.kt imports are unchanged.
+    implementation("io.github.Rosemoe.sora-editor:editor:0.23.5")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("androidx.work:work-runtime-ktx:2.9.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
