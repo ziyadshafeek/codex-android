@@ -14,14 +14,39 @@ android {
         applicationId = "dev.codex.android"
         minSdk = 26
         targetSdk = 34
-        versionCode = 11
-        versionName = "1.0.0"
+        versionCode = 12
+        versionName = "2.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    // Release signing (v2.0.0): the signing config is created ONLY when the
+    // CI keystore env vars are present (ANDROID_KEYSTORE_PASSWORD,
+    // ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD). Local and debug builds
+    // without them are unaffected — no signingConfig is created or applied.
+    // ANDROID_KEYSTORE_PATH is optional: it defaults to "release.keystore"
+    // in the project root (where CI decodes ANDROID_KEYSTORE_BASE64).
+    val releaseKeystorePresent = System.getenv("ANDROID_KEYSTORE_PASSWORD") != null
+        && System.getenv("ANDROID_KEY_ALIAS") != null
+        && System.getenv("ANDROID_KEY_PASSWORD") != null
+    if (releaseKeystorePresent) {
+        signingConfigs {
+            create("release") {
+                storeFile = file(System.getenv("ANDROID_KEYSTORE_PATH") ?: "release.keystore")
+                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            // Sign the release build only when the CI keystore is present;
+            // without it the release build stays unsigned (debug unaffected).
+            if (releaseKeystorePresent) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

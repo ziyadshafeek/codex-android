@@ -115,6 +115,29 @@ jobs:
           name: app-debug
           path: app/build/outputs/apk/debug/app-debug.apk
 
+      # Release signing (v2.0.0): decode the release keystore from the
+      # ANDROID_KEYSTORE_BASE64 secret into the repo root. The secret is
+      # piped straight into base64 -d and never echoed.
+      - name: Decode release keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$GITHUB_WORKSPACE/release.keystore"
+
+      - name: Build release APK
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/release.keystore
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Upload release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release
+          path: app/build/outputs/apk/release/app-release.apk
+
   emulator-test:
     runs-on: ubuntu-latest
     steps:
