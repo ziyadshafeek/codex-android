@@ -19,6 +19,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import java.text.SimpleDateFormat
@@ -59,6 +60,7 @@ fun HistoryScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
             ) {
                 Text(
                     text = "No past runs yet.",
+                    modifier = Modifier.testTag("history_empty"),
                     textAlign = TextAlign.Center,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -69,6 +71,7 @@ fun HistoryScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
                     .fillMaxSize()
                     .padding(padding)
                     .padding(horizontal = 12.dp)
+                    .testTag("history_list")
             ) {
                 items(history) { entry ->
                     Column(

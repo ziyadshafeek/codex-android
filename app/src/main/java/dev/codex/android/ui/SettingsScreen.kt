@@ -31,6 +31,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -89,14 +90,14 @@ fun SettingsScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
                 value = baseUrl,
                 onValueChange = { baseUrl = it },
                 label = { Text("Base URL") },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().testTag("settings_base_url")
             )
             Spacer(modifier = Modifier.height(12.dp))
             OutlinedTextField(
                 value = model,
                 onValueChange = { model = it },
                 label = { Text("Model") },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().testTag("settings_model")
             )
             Spacer(modifier = Modifier.height(12.dp))
             OutlinedTextField(
@@ -105,7 +106,7 @@ fun SettingsScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
                 label = { Text("API key") },
                 placeholder = { Text("Paste your key here") },
                 visualTransformation = PasswordVisualTransformation(),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().testTag("settings_api_key")
             )
             Spacer(modifier = Modifier.height(16.dp))
             Button(
@@ -118,7 +119,7 @@ fun SettingsScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
                     viewModel.refreshKeyState()
                     saved = true
                 },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().testTag("settings_save")
             ) {
                 Text("Save")
             }
@@ -129,13 +130,17 @@ fun SettingsScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
                     viewModel.refreshKeyState()
                     saved = false
                 },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().testTag("settings_clear_key")
             ) {
                 Text("Clear key")
             }
             if (saved) {
                 Spacer(modifier = Modifier.height(8.dp))
-                Text("Saved", color = MaterialTheme.colorScheme.primary)
+                Text(
+                    "Saved",
+                    modifier = Modifier.testTag("settings_saved"),
+                    color = MaterialTheme.colorScheme.primary
+                )
             }
             Spacer(modifier = Modifier.height(16.dp))
             Text(

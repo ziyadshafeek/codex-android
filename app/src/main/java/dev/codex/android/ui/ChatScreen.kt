@@ -28,6 +28,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
@@ -87,6 +88,7 @@ fun ChatScreen(
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
                             text = "What should Codex do?",
+                            modifier = Modifier.testTag("empty_state_title"),
                             style = MaterialTheme.typography.titleMedium,
                             textAlign = TextAlign.Center
                         )
@@ -108,6 +110,7 @@ fun ChatScreen(
                     .weight(1f)
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp)
+                    .testTag("chat_messages")
             ) {
                 items(messages) { message ->
                     val displayText = if (message.isError) "⚠ ${message.text}" else message.text
@@ -163,7 +166,8 @@ fun ChatScreen(
                     text = "No API endpoint or key set — open Settings to add yours.",
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                        .testTag("no_key_banner"),
                     textAlign = TextAlign.Center,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -179,7 +183,7 @@ fun ChatScreen(
                     value = text,
                     onValueChange = { text = it },
                     placeholder = { Text("Ask Codex to do something…") },
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f).testTag("chat_input")
                 )
                 Button(
                     onClick = {
@@ -187,7 +191,7 @@ fun ChatScreen(
                         text = ""
                     },
                     enabled = text.isNotBlank() && !isRunning,
-                    modifier = Modifier.padding(start = 8.dp)
+                    modifier = Modifier.padding(start = 8.dp).testTag("chat_send")
                 ) {
                     Text("Send")
                 }

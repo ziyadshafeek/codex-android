@@ -28,6 +28,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -145,14 +146,14 @@ fun StoreScreen(onBack: () -> Unit) {
                     value = appName,
                     onValueChange = { appName = it },
                     label = { Text("App name") },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().testTag("store_app_name")
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
                     value = appDescription,
                     onValueChange = { appDescription = it },
                     label = { Text("Description") },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().testTag("store_app_description")
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
@@ -160,7 +161,7 @@ fun StoreScreen(onBack: () -> Unit) {
                     onValueChange = { priceRupees = it.filter { ch -> ch.isDigit() } },
                     label = { Text("Price in rupees (empty = free)") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().testTag("store_price")
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 Button(
@@ -221,7 +222,7 @@ fun StoreScreen(onBack: () -> Unit) {
                             }
                         }
                     },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().testTag("store_generate")
                 ) {
                     Text("Generate")
                 }
@@ -241,7 +242,7 @@ fun StoreScreen(onBack: () -> Unit) {
                 Text(
                     text = "Store",
                     style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(bottom = 4.dp)
+                    modifier = Modifier.padding(bottom = 4.dp).testTag("store_approved")
                 )
             }
             if (approved.isEmpty()) {
@@ -265,7 +266,7 @@ fun StoreScreen(onBack: () -> Unit) {
                 Text(
                     text = "Pending approval",
                     style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(bottom = 4.dp)
+                    modifier = Modifier.padding(bottom = 4.dp).testTag("store_pending")
                 )
             }
             if (pending.isEmpty()) {
@@ -288,7 +289,8 @@ fun StoreScreen(onBack: () -> Unit) {
                     text = "Payments are not live yet. The store lists apps and takes " +
                         "requests; real payments and publishing come later.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.testTag("store_payments_note")
                 )
                 Spacer(modifier = Modifier.height(16.dp))
             }

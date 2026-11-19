@@ -26,6 +26,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import dev.codex.android.service.BatteryHelper
 
@@ -51,7 +52,10 @@ fun OnboardingScreen(onFinish: () -> Unit) {
             TopAppBar(
                 title = { Text("Welcome to Codex") },
                 actions = {
-                    TextButton(onClick = onFinish) {
+                    TextButton(
+                        onClick = onFinish,
+                        modifier = Modifier.testTag("onboarding_skip")
+                    ) {
                         Text("Skip")
                     }
                 }
@@ -67,6 +71,7 @@ fun OnboardingScreen(onFinish: () -> Unit) {
         ) {
             Text(
                 text = "Step ${step + 1} of 4",
+                modifier = Modifier.testTag("onboarding_step"),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -176,7 +181,8 @@ fun OnboardingScreen(onFinish: () -> Unit) {
                         } else {
                             onFinish()
                         }
-                    }
+                    },
+                    modifier = Modifier.testTag("onboarding_next")
                 ) {
                     Text(if (step < 3) "Next" else "Done")
                 }
