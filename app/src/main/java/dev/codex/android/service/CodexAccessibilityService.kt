@@ -345,13 +345,25 @@ class CodexAccessibilityService : AccessibilityService() {
     suspend fun captureScreenshotToFile(): String? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
         val deferred = CompletableDeferred<Bitmap?>()
+        // takeScreenshot() returns Unit (void), not a dispatched flag:
+        // a throw means it never started.
         val dispatched = runCatching {
             takeScreenshot(
                 Display.DEFAULT_DISPLAY,
                 mainExecutor,
                 object : TakeScreenshotCallback {
                     override fun onSuccess(screenshot: ScreenshotResult) {
-                        deferred.complete(runCatching { screenshot.bitmap }.getOrNull())
+                        // API 30+ hands back a HardwareBuffer, not a
+                        // Bitmap: wrap it. Ownership of the buffer moves
+                        // to the Bitmap; it is released by recycle() in
+                        // the caller below.
+                        deferred.complete(
+                            runCatching {
+                                screenshot.hardwareBuffer?.let { buffer ->
+                                    Bitmap.wrapHardwareBuffer(buffer, screenshot.colorSpace)
+                                }
+                            }.getOrNull(),
+                        )
                     }
 
                     override fun onFailure(errorCode: Int) {
@@ -360,7 +372,7 @@ class CodexAccessibilityService : AccessibilityService() {
                     }
                 },
             )
-        }.getOrDefault(false)
+        }.isSuccess
         if (!dispatched) return null
         val bitmap = withTimeoutOrNull(OPERATION_TIMEOUT_MS) { deferred.await() } ?: return null
         return try {
