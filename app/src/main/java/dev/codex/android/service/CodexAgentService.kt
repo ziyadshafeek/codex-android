@@ -102,6 +102,25 @@ class CodexAgentService : Service() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        // Promote to foreground IMMEDIATELY, in onCreate rather than
+        // waiting for onStartCommand: on a slow/low-end device (or a
+        // slow emulator) the system can deliver onStartCommand late,
+        // and if startForeground() has not run within the foreground-
+        // service timeout the system kills the app with
+        // ForegroundServiceDidNotStartInTimeException. Promoting here
+        // satisfies the timeout as soon as the service exists.
+        NotificationHelper.createChannel(this)
+        runCatching {
+            startForeground(
+                RUNNING_NOTIFICATION_ID,
+                NotificationHelper.runningNotification(this, currentStatus),
+            )
+        }.onFailure { e ->
+            // A foreground service that cannot promote itself must not
+            // linger as a background service: stop cleanly.
+            Log.w(TAG, "Failed to enter foreground in onCreate: ${e.javaClass.simpleName}")
+            stopSelf()
+        }
         Log.i(TAG, "Agent service created")
     }
 

@@ -196,12 +196,14 @@ class ChatSettingsTest {
         // network, no client is built); wait for it to appear, then
         // assert both it and the user's own message are in the list.
         // If the app crashed on send, the wait itself would fail.
+        // The message is rendered with a "⚠ " prefix (isError), so
+        // match by substring, not by exact text.
         composeTestRule.waitUntil(timeoutMillis = 10_000) {
-            composeTestRule.onAllNodesWithText(NO_KEY_SYSTEM_MESSAGE)
+            composeTestRule.onAllNodesWithText(NO_KEY_SYSTEM_MESSAGE, substring = true)
                 .fetchSemanticsNodes().isNotEmpty()
         }
         composeTestRule.onNodeWithText(goal).assertIsDisplayed()
-        composeTestRule.onNodeWithText(NO_KEY_SYSTEM_MESSAGE)
+        composeTestRule.onNodeWithText(NO_KEY_SYSTEM_MESSAGE, substring = true)
             .assertIsDisplayed()
         composeTestRule.onNodeWithTag("chat_messages").assertIsDisplayed()
     }
@@ -302,12 +304,29 @@ class ChatSettingsTest {
 
         // Back to chat and re-open Settings: the saved values must still
         // be there (read back from the KeyStore on recomposition).
+        // assertTextEquals cannot be used here: the field's semantics
+        // carry BOTH the label ("Base URL"/"Model") as Text and the
+        // saved value as EditableText, so the merged text never equals
+        // the value alone. Assert on EditableText directly instead.
         backToChat()
         openSettings()
 
-        composeTestRule.onNodeWithTag("settings_base_url")
-            .assertTextEquals(FAKE_BASE_URL)
-        composeTestRule.onNodeWithTag("settings_model")
-            .assertTextEquals(FAKE_MODEL)
+        assertEditableText("settings_base_url", FAKE_BASE_URL)
+        assertEditableText("settings_model", FAKE_MODEL)
+    }
+
+    /**
+     * Asserts a TextField's current value by reading its EditableText
+     * semantics property (the actual input), ignoring the label text
+     * that assertTextEquals would also see.
+     */
+    private fun assertEditableText(tag: String, expected: String) {
+        val node = composeTestRule.onNodeWithTag(tag).fetchSemanticsNode()
+        val actual = if (SemanticsProperties.EditableText in node.config) {
+            node.config[SemanticsProperties.EditableText].text
+        } else {
+            null
+        }
+        assertEquals(expected, actual)
     }
 }

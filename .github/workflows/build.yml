@@ -31,6 +31,12 @@ jobs:
       - name: Build debug APK
         run: ./gradlew assembleDebug --no-daemon
 
+      # JVM unit tests (ApprovalGate, RetryPolicy, ToolCallParser,
+      # SseParser): no emulator needed, so they run in the build job.
+      # connectedDebugAndroidTest does NOT run these.
+      - name: Run JVM unit tests
+        run: ./gradlew testDebugUnitTest --no-daemon
+
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
