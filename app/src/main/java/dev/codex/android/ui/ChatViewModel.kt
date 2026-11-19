@@ -175,12 +175,24 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 val recent = memoryStore.recentMessages(100)
                 // History: distinct user goals, latest occurrence kept,
                 // newest first, capped at 50.
-                _history.value = recent
+                val seeded = recent
                     .filter { it.role == "user" }
                     .sortedByDescending { it.createdAtMillis }
                     .distinctBy { it.content }
                     .take(50)
                     .map { HistoryEntry(it.content, it.createdAtMillis) }
+                // Merge, never wholesale-replace: a goal sent while this
+                // restore was still reading (slow first DB open, skill
+                // seeding) is already in _history via recordHistory and
+                // must survive the seed — the restore's read predates the
+                // memory save, so the seeded list does not contain it.
+                // Same merge discipline as mergeRestored for messages.
+                _history.update { current ->
+                    val inSession = current.filter { entry ->
+                        seeded.none { it.text == entry.text }
+                    }
+                    (inSession + seeded).take(50)
+                }
                 // Chat restore keeps its old behaviour: newest 20 only.
                 val restore = recent.takeLast(20)
                 if (restore.isNotEmpty()) {
