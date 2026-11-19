@@ -33,6 +33,18 @@ data class ExtractedBinary(
     val tarPath: String,
     val stagedFileName: String,
     val expectedSha256: String,
+    /**
+     * Name CI packages the binary under in `jniLibs` (defaults to
+     * [stagedFileName]). Only libtalloc differs: AGP packages only
+     * `*.so` from jniLibs and silently drops the version-suffixed
+     * `libtalloc.so.2`, so CI ships it as `libtalloc.so` and patches
+     * libproot.so's DT_NEEDED to `libtalloc.so` with patchelf (the
+     * library bytes — and their pinned hash — are unchanged, only the
+     * file name). The runtime first-run path still stages the
+     * unpatched `libtalloc.so.2` into native-stage, where the
+     * unpatched downloaded libproot.so finds it by that name.
+     */
+    val packagedFileName: String? = null,
 )
 
 /**
@@ -429,6 +441,13 @@ object DebExtractor {
  *   (W^X enforcement). At runtime, executable PIE `.so` binaries MUST live in
  *   `context.applicationInfo.nativeLibraryDir` (packaged into `app/src/main/jniLibs/arm64-v8a/`
  *   by the CI build with `useLegacyPackaging = true` and `keepDebugSymbols`).
+ *   AGP packages only `*.so` from jniLibs, so the version-suffixed
+ *   `libtalloc.so.2` is shipped as `libtalloc.so` and CI patches
+ *   libproot.so's DT_NEEDED to `libtalloc.so` with patchelf (verified by
+ *   readelf in the workflow; the library bytes and pinned hash are
+ *   unchanged). The first-run download path is unaffected: it stages the
+ *   unpatched `libtalloc.so.2` into native-stage, where the unpatched
+ *   downloaded libproot.so finds it by that name.
  * - When `nativeLibraryDir` does not yet contain pre-packaged `.so` files (e.g., dev builds
  *   or first-run verification), [ensureRootfs] downloads the official release artifacts
  *   over HTTPS, verifies every download against [PINNED_ARTIFACTS], stages verified
@@ -528,7 +547,11 @@ class RootfsManager internal constructor(
      * own pinned hash before staging.
      */
     private fun ensureDebArtifact(artifact: PinnedArtifact, downloadCache: File, stageDir: File) {
-        if (artifact.extractedBinaries.all { File(nativeLibDir, it.stagedFileName).isFile }) {
+        // Packaged name, not staged name: CI ships libtalloc as
+        // libtalloc.so (see ExtractedBinary.packagedFileName), so
+        // checking for libtalloc.so.2 here would download the .deb on
+        // every first run even on production APKs.
+        if (artifact.extractedBinaries.all { File(nativeLibDir, it.packagedFileName ?: it.stagedFileName).isFile }) {
             return
         }
         val downloaded = File(downloadCache, "${artifact.id}.download")
@@ -667,6 +690,7 @@ class RootfsManager internal constructor(
                         tarPath = "data/data/com.termux/files/usr/lib/libtalloc.so.2",
                         stagedFileName = "libtalloc.so.2",
                         expectedSha256 = "742b438c4d09e276985a61d44164c9de207b6d8cc268f3018cb3001961bcb309",
+                        packagedFileName = "libtalloc.so",
                     ),
                 ),
             ),

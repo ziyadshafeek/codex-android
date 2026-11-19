@@ -53,11 +53,21 @@ jobs:
           mkdir -p talloc shmem
           (cd talloc && ar x ../libtalloc.deb && tar -xf data.tar.xz)
           (cd shmem && ar x ../libandroid-shmem.deb && tar -xf data.tar.xz)
-          cp talloc/data/data/com.termux/files/usr/lib/libtalloc.so.2 ../app/src/main/jniLibs/arm64-v8a/libtalloc.so.2
+          # AGP packages only *.so from jniLibs and silently drops the
+          # version-suffixed libtalloc.so.2, so ship the same bytes as
+          # libtalloc.so (hash unchanged) and patch libproot.so's
+          # DT_NEEDED to match (patchelf --replace-needed). The runtime
+          # first-run path is unaffected: it stages the unpatched
+          # libtalloc.so.2 into native-stage for the unpatched proot.
+          cp talloc/data/data/com.termux/files/usr/lib/libtalloc.so.2 ../app/src/main/jniLibs/arm64-v8a/libtalloc.so
           cp shmem/data/data/com.termux/files/usr/lib/libandroid-shmem.so ../app/src/main/jniLibs/arm64-v8a/libandroid-shmem.so
-          echo "742b438c4d09e276985a61d44164c9de207b6d8cc268f3018cb3001961bcb309  ../app/src/main/jniLibs/arm64-v8a/libtalloc.so.2" | sha256sum -c -
+          echo "742b438c4d09e276985a61d44164c9de207b6d8cc268f3018cb3001961bcb309  ../app/src/main/jniLibs/arm64-v8a/libtalloc.so" | sha256sum -c -
           echo "84475798e07c8174dbbfaec70a827fdb02f19ffa69a589380c13e7507fd0e731  ../app/src/main/jniLibs/arm64-v8a/libandroid-shmem.so" | sha256sum -c -
-          chmod +x ../app/src/main/jniLibs/arm64-v8a/libproot.so ../app/src/main/jniLibs/arm64-v8a/libproot-loader.so ../app/src/main/jniLibs/arm64-v8a/libtalloc.so.2 ../app/src/main/jniLibs/arm64-v8a/libandroid-shmem.so
+          command -v patchelf >/dev/null || sudo apt-get install -y patchelf
+          patchelf --replace-needed libtalloc.so.2 libtalloc.so ../app/src/main/jniLibs/arm64-v8a/libproot.so
+          readelf -d ../app/src/main/jniLibs/arm64-v8a/libproot.so | grep -F '[libtalloc.so]' || { echo "patchelf failed: libproot.so does not need libtalloc.so"; exit 1; }
+          if readelf -d ../app/src/main/jniLibs/arm64-v8a/libproot.so | grep -F 'libtalloc.so.2'; then echo "patchelf failed: libproot.so still needs libtalloc.so.2"; exit 1; fi
+          chmod +x ../app/src/main/jniLibs/arm64-v8a/libproot.so ../app/src/main/jniLibs/arm64-v8a/libproot-loader.so ../app/src/main/jniLibs/arm64-v8a/libtalloc.so ../app/src/main/jniLibs/arm64-v8a/libandroid-shmem.so
           cd ..
           rm -rf deb-tmp
 
@@ -83,14 +93,14 @@ jobs:
         run: ./gradlew assembleDebug --no-daemon
 
       # The Linux terminal is dead on a real phone if any of the four
-      # native libs is missing from the APK (libproot.so links
-      # libtalloc.so.2 + libandroid-shmem.so). AGP must package even the
-      # version-suffixed libtalloc.so.2 — assert all four are present.
+      # native libs is missing from the APK (libproot.so links libtalloc.so
+      # — patched from libtalloc.so.2, which AGP refuses to package —
+      # + libandroid-shmem.so). Assert all four are present.
       - name: Verify native libs packaged in APK
         run: |
           unzip -l app/build/outputs/apk/debug/app-debug.apk | grep 'lib/arm64-v8a/libproot.so' || { echo "libproot.so MISSING from APK"; exit 1; }
           unzip -l app/build/outputs/apk/debug/app-debug.apk | grep 'lib/arm64-v8a/libproot-loader.so' || { echo "libproot-loader.so MISSING from APK"; exit 1; }
-          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep 'lib/arm64-v8a/libtalloc.so.2' || { echo "libtalloc.so.2 MISSING from APK"; exit 1; }
+          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep 'lib/arm64-v8a/libtalloc.so$' || { echo "libtalloc.so MISSING from APK"; exit 1; }
           unzip -l app/build/outputs/apk/debug/app-debug.apk | grep 'lib/arm64-v8a/libandroid-shmem.so' || { echo "libandroid-shmem.so MISSING from APK"; exit 1; }
 
       # JVM unit tests (ApprovalGate, RetryPolicy, ToolCallParser,
