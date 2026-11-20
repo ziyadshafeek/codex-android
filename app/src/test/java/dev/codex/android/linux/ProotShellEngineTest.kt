@@ -1,5 +1,6 @@
 package dev.codex.android.linux
 
+import dev.codex.android.server.CodexCli
 import kotlinx.coroutines.runBlocking
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
@@ -12,6 +13,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
+import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Ignore
 import org.junit.Test
@@ -168,6 +170,28 @@ class ProotShellEngineTest {
         assertFalse(RootfsVerifier.verifySha256(placeholderFile, "PLACEHOLDER_HASH_TO_PIN"))
         assertFalse(RootfsVerifier.verifySha256(placeholderFile, ""))
         assertFalse(RootfsVerifier.verifySha256(placeholderFile, "zz".repeat(32)))
+    }
+
+    @Test
+    fun productionAlpineArchive_installsGuestShellAndCodexScript() = runBlocking {
+        assumeTrue("Live archive check is enabled by build.yml", System.getenv("CODEX_CI_VERIFY_ALPINE") == "1")
+        val artifact = RootfsManager.PINNED_ARTIFACTS.single { it.id == RootfsManager.ARTIFACT_ALPINE_ROOTFS }
+        val manager = RootfsManager(tempDir, nativeLibDir, artifacts = listOf(artifact))
+        val root = manager.ensureRootfs()
+
+        assertTrue(manager.isInstalled())
+        assertTrue(File(root, "bin/sh").canExecute())
+        assertTrue(File(root, "bin/busybox").canExecute())
+        assertTrue(File(root, "lib/ld-musl-aarch64.so.1").isFile)
+        assertTrue(File(root, "workspace").isDirectory)
+        assertTrue(File(root, "etc/codex").isDirectory)
+
+        val cli = CodexCli.installIntoRootfs(root, File(tempDir, "linux"), "ci-test-token")
+        assertEquals(File(root, "root/bin/codex"), cli)
+        assertTrue(cli.canExecute())
+        assertTrue(File(tempDir, "linux/daemon.env").isFile)
+        assertEquals(root, manager.ensureRootfs())
+        assertTrue(cli.isFile)
     }
 
     @Test

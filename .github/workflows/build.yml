@@ -106,7 +106,9 @@ jobs:
       # JVM unit tests (ApprovalGate, RetryPolicy, ToolCallParser,
       # SseParser): no emulator needed, so they run in the build job.
       # connectedDebugAndroidTest does NOT run these.
-      - name: Run JVM unit tests
+      - name: Run JVM unit tests and verify the production Alpine archive
+        env:
+          CODEX_CI_VERIFY_ALPINE: "1"
         run: ./gradlew testDebugUnitTest --no-daemon
 
       - name: Upload debug APK
@@ -149,6 +151,16 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: ./gradlew assembleRelease --no-daemon
+
+      - name: Verify release APK signature and native libraries
+        run: |
+          set -euo pipefail
+          apk=app/build/outputs/apk/release/app-release.apk
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify "$apk"
+          entries=$(unzip -Z1 "$apk")
+          for lib in libproot.so libproot-loader.so libtalloc.so libandroid-shmem.so; do
+            grep -Fx "lib/arm64-v8a/$lib" <<< "$entries" || { echo "$lib missing from release APK"; exit 1; }
+          done
 
       - name: Upload release APK
         uses: actions/upload-artifact@v4
