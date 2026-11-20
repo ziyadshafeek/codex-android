@@ -3,6 +3,7 @@ package dev.codex.android.service
 import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import dev.codex.android.memory.PersonalMemory
 import dev.codex.android.agent.AgentEvent
 import dev.codex.android.agent.AgentLoop
 import dev.codex.android.agent.AgentRuntime
@@ -352,6 +353,7 @@ class AutomationWorker(
             planStore = PlanStore(context),
             model = model,
             skills = skills,
+            recalledMemory = PersonalMemory(context)::recall,
         )
 
         return try {

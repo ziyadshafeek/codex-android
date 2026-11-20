@@ -170,6 +170,12 @@ class KeyStore(context: Context) {
         prefs.edit().remove(KEY_GITHUB_REPO).apply()
     }
 
+    internal fun isMemoryRecallEnabled(): Boolean = prefs.getBoolean("memory_recall_enabled", true)
+
+    internal fun setMemoryRecallEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("memory_recall_enabled", enabled).apply()
+    }
+
     /** True when a non-blank API key is stored. */
     fun hasKey(): Boolean = getApiKey()?.isNotBlank() == true
 }

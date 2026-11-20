@@ -26,6 +26,9 @@ import dev.codex.android.data.KeyStore
 import dev.codex.android.data.MemoryStore
 import dev.codex.android.data.TimelineMessage
 import dev.codex.android.data.WorkspaceEntity
+import dev.codex.android.memory.MemoryCommand
+import dev.codex.android.memory.PersonalMemory
+import dev.codex.android.memory.parseMemoryCommand
 import dev.codex.android.security.ApprovalGate
 import dev.codex.android.security.ExecutionMode
 import dev.codex.android.security.PendingAction
@@ -135,6 +138,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val registry: ToolRegistry = ToolRegistry.withBuiltins(application)
     internal val workspaceFileTools by lazy { WorkspaceFileTools(File(application.filesDir, "workspace")) }
     private val memoryStore: MemoryStore = MemoryStore(application)
+    internal val personalMemory = PersonalMemory(application)
+    private val memoryCommands = Mutex()
+    private var chatGeneration = 0
     private val skillStore: SkillStore = SkillStore(application)
 
     private val _messages = MutableStateFlow<List<ChatUiMessage>>(emptyList())
@@ -355,6 +361,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     /** Start a separate thread on the next message, without deleting the previous one. */
     fun newChat() {
         if (startingTurn || _isRunning.value || _compacting.value) return
+        chatGeneration++
         freshChat = true
         currentThreadId = null
         openedThreadId = null
@@ -404,7 +411,41 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun handleMemoryCommand(command: MemoryCommand) {
+        val generation = chatGeneration
+        viewModelScope.launch {
+            val reply = memoryCommands.withLock {
+                when (command) {
+                    is MemoryCommand.Remember -> personalMemory.remember(command.key, command.note)
+                    is MemoryCommand.Forget -> when {
+                        command.key.isBlank() -> "Use /forget followed by the note name. Use /memory to see names."
+                        personalMemory.forget(command.key) -> "Forgot the saved note. Existing chat history was not changed."
+                        else -> "Could not remove that note. Check its name with /memory."
+                    }
+                    is MemoryCommand.ListNotes -> {
+                        val matching = personalMemory.list().filter {
+                            it.key.contains(command.filter, ignoreCase = true) || it.value.contains(command.filter, ignoreCase = true)
+                        }
+                        if (matching.isEmpty()) "No matching saved notes. Use /remember name = note to add one."
+                        else buildString {
+                            appendLine("Saved notes (${matching.size}):")
+                            matching.take(10).forEach { appendLine("${it.key}: ${it.value}") }
+                            if (matching.size > 10) append("Search or edit all notes in Settings → Memory.")
+                        }.trimEnd()
+                    }
+                    MemoryCommand.Help -> "Use /remember name = note, /memory to list notes, or /forget name."
+                }
+            }
+            // No transcript, analytics, or model call is made for memory commands.
+            if (generation == chatGeneration) append(ChatUiMessage("system", reply))
+        }
+    }
+
     fun sendGoal(goal: String, mode: ExecutionMode = ExecutionMode.AUTO) {
+        parseMemoryCommand(goal)?.let { command ->
+            if (!startingTurn && !_compacting.value && !_isRunning.value) handleMemoryCommand(command)
+            return
+        }
         if (goal.trim().equals("/compact", ignoreCase = true)) { compactChat(); return }
         if (goal.isBlank() || _compacting.value) return
         if (startingTurn) return
@@ -516,6 +557,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun openThread(threadId: String) {
         if (_compacting.value || startingTurn || _isRunning.value) return
+        chatGeneration++
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val db = CodexDatabase.getInstance(getApplication())
@@ -609,6 +651,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             model = model,
             skills = skills,
             recentConversation = conversation,
+            recalledMemory = { personalMemory.recall(it) },
             sessionInstructions = if (mode == ExecutionMode.PLAN) {
                 "Plan mode is read-only. Inspect with workspace_list and workspace_read; ask the user to switch to Build before changing files, running shell commands, or starting CI."
             } else {

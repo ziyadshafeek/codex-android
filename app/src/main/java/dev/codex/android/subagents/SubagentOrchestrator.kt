@@ -1,6 +1,7 @@
 package dev.codex.android.subagents
 
 import android.content.Context
+import dev.codex.android.memory.PersonalMemory
 import dev.codex.android.agent.AgentEvent
 import dev.codex.android.agent.AgentLoop
 import dev.codex.android.agent.AgentRuntime
@@ -167,6 +168,7 @@ class DefaultSubagentLoopFactory(
             planStore = PlanStore(appContext),
             model = model,
             skills = skills,
+            recalledMemory = PersonalMemory(appContext)::recall,
         )
         // Same event → TurnContext mapping as ChatViewModel.runAgentTurn:
         // one step per plan / model reply / tool start; approvals go through

@@ -271,6 +271,8 @@ fun SettingsScreen(viewModel: ChatViewModel, onBack: () -> Unit, onOpenHelp: () 
                 Text("Automations")
             }
             Spacer(modifier = Modifier.height(16.dp))
+            MemorySettings(viewModel.personalMemory)
+            Spacer(modifier = Modifier.height(16.dp))
             Text("GitHub Actions", style = MaterialTheme.typography.titleMedium)
             Text("Use an existing build repository and a fine-grained token limited to that repository. " +
                 "Source publishing needs Contents write; manual builds need Actions write. " +
