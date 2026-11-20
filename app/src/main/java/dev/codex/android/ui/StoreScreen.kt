@@ -34,7 +34,10 @@ import dev.codex.android.store.AppGenerator
 import dev.codex.android.store.AppTemplate
 import dev.codex.android.store.StoreCatalog
 import dev.codex.android.store.StoreListing
+import java.io.File
 import java.util.UUID
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 
 /**
@@ -42,9 +45,8 @@ import kotlinx.coroutines.launch
  *
  * The agent generates small apps from three templates (counter, notes,
  * timer) and lists them in a local catalogue with a moderation flag
- * (approved / pending). The APK build runs on a build service, not on
- * the phone. The store lists apps only; it takes no payment and holds
- * no payment code anywhere in this file.
+ * (approved / pending). This screen saves source only; use Workbench
+ * to publish a project and request its GitHub Actions build.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -173,27 +175,24 @@ fun StoreScreen(onBack: () -> Unit) {
                                     description = description,
                                     templateId = selectedTemplateId
                                 )
-                                // The build runs on a build service, not on
-                                // the phone; requestBuild only files the
-                                // request and returns the app with status
-                                // BUILD_REQUESTED. The listing links back to
-                                // the generated app via its id.
-                                val requested = AppGenerator.requestBuild(generated)
+                                val source = withContext(Dispatchers.IO) {
+                                    AppGenerator.saveSource(generated, File(context.filesDir, "workspace"))
+                                }
                                 catalog.save(
                                     StoreListing(
                                         id = UUID.randomUUID().toString(),
-                                        appId = requested.id,
+                                        appId = generated.id,
                                         name = name,
                                         description = description,
-                                        status = requested.status,
+                                        status = generated.status,
                                         approved = false,
                                         createdAtMillis = System.currentTimeMillis()
                                     )
                                 )
                                 appName = ""
                                 appDescription = ""
-                                statusMessage = "Generated '$name'. Build requested. " +
-                                    "Listed as pending approval."
+                                statusMessage = "Saved source for '$name'. No APK build was started. " +
+                                    "Find it in Workbench → Files: $source"
                                 reload()
                             } catch (e: Exception) {
                                 statusMessage = "Could not generate the app: ${e.message}"

@@ -32,6 +32,21 @@ class CodexCliTest {
     }
 
     @Test
+    fun helpWorksBeforeDaemonStarts() {
+        val dir = Files.createTempDirectory("codex-cli-help").toFile()
+        try {
+            val script = File(dir, "codex").apply { writeText(CodexCli.buildCliScript()) }
+            val process = ProcessBuilder("/bin/sh", script.absolutePath, "--help").redirectErrorStream(true).start()
+            val output = process.inputStream.bufferedReader().use { it.readText() }
+            assertEquals(0, process.waitFor())
+            assertTrue(output.contains("Usage: codex"))
+            assertTrue(script.readText().contains("/bin/busybox wget -Y off"))
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
     fun buildCliScript_matchesGenerateScript() {
         assertEquals(CodexCli.generateScript(), CodexCli.buildCliScript())
     }

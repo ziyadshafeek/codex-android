@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import dev.codex.android.api.endpointKey
 
 /**
  * On-device store for the user's own API credentials (BYOK — bring your own key).
@@ -16,8 +17,8 @@ import androidx.security.crypto.MasterKey
  * Storage is [EncryptedSharedPreferences] (AES256_GCM master key,
  * AES256_SIV key encryption, AES256_GCM value encryption). If encrypted
  * storage cannot be created (e.g. a broken keystore on some devices), this
- * falls back to plain [SharedPreferences] so the app still works; the
- * constructor never throws.
+ * falls back to plain [SharedPreferences] only for non-secret settings.
+ * API keys are unavailable when encrypted storage fails.
  */
 class KeyStore(context: Context) {
 
@@ -34,6 +35,8 @@ class KeyStore(context: Context) {
         private const val KEY_API_KEY = "api_key"
         private const val KEY_BASE_URL = "base_url"
         private const val KEY_MODEL = "model"
+        private const val KEY_GITHUB_REPO = "github_repo"
+        private const val KEY_GITHUB_TOKEN = "github_token"
         private const val TAG = "KeyStore"
 
         // Process-wide cache (diagnosis item 8): the encrypted store is
@@ -43,6 +46,14 @@ class KeyStore(context: Context) {
         @Volatile
         private var cachedPrefs: SharedPreferences? = null
         private val prefsLock = Any()
+        @Volatile private var encryptedProviderPrefsAvailable = false
+        private var githubPrefs: SharedPreferences? = null
+
+        // GitHub write credentials never fall back to plaintext storage.
+        private fun githubPrefsFor(context: Context): SharedPreferences = synchronized(prefsLock) {
+            githubPrefs ?: createEncryptedPrefs(context.applicationContext, "codex_github_keys")
+                .also { githubPrefs = it }
+        }
 
         /** Returns the process-wide prefs instance, creating it once. */
         fun prefsFor(context: Context): SharedPreferences {
@@ -61,24 +72,23 @@ class KeyStore(context: Context) {
             prefsFor(context)
         }
 
-        private fun createPrefs(context: Context): SharedPreferences = try {
-            val masterKey = MasterKey.Builder(context)
-                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-                .build()
+        private fun createEncryptedPrefs(context: Context, name: String): SharedPreferences =
             EncryptedSharedPreferences.create(
-                context,
-                PREFS_FILE,
-                masterKey,
+                context, name,
+                MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build(),
                 EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
             )
+
+        private fun createPrefs(context: Context): SharedPreferences = try {
+            createEncryptedPrefs(context, PREFS_FILE).also { encryptedProviderPrefsAvailable = true }
         } catch (e: Exception) {
             // Log only which store is in use — never the key or exception detail.
             Log.w(TAG, "encrypted store unavailable, using fallback store")
             context.getSharedPreferences(
                 "${PREFS_FILE}_fallback",
                 Context.MODE_PRIVATE,
-            )
+            ).also { it.edit().remove(KEY_API_KEY).apply() }
         }
     }
 
@@ -92,7 +102,10 @@ class KeyStore(context: Context) {
     private val prefs: SharedPreferences get() = prefsFor(appContext)
 
     /** The stored API key, or null when none has been set. */
-    fun getApiKey(): String? = prefs.getString(KEY_API_KEY, null)
+    fun getApiKey(): String? {
+        val store = prefs
+        return if (encryptedProviderPrefsAvailable) store.getString(KEY_API_KEY, null) else null
+    }
 
     /**
      * Stores the API key, trimmed. Blank keys are rejected (nothing is stored).
@@ -101,7 +114,9 @@ class KeyStore(context: Context) {
     fun setApiKey(key: String) {
         val trimmed = key.trim()
         if (trimmed.isBlank()) return
-        prefs.edit().putString(KEY_API_KEY, trimmed).apply()
+        val store = prefs
+        check(encryptedProviderPrefsAvailable) { "Encrypted API key storage is unavailable." }
+        store.edit().putString(KEY_API_KEY, trimmed).apply()
     }
 
     /** Removes the stored API key. */
@@ -125,6 +140,51 @@ class KeyStore(context: Context) {
     /** Stores the model name, trimmed (item 7). */
     fun setModel(model: String) {
         prefs.edit().putString(KEY_MODEL, model.trim()).apply()
+    }
+
+    /** Save a provider change atomically; never carry an old key to a different endpoint. */
+    internal fun saveProvider(baseUrl: String, model: String, newKey: String) {
+        val store = prefs
+        val key = newKey.trim()
+        if (key.isNotEmpty()) check(encryptedProviderPrefsAvailable) { "Encrypted API key storage is unavailable." }
+        val edit = store.edit().putString(KEY_BASE_URL, baseUrl.trim()).putString(KEY_MODEL, model.trim())
+        if (key.isNotEmpty()) edit.putString(KEY_API_KEY, key)
+        else if (endpointKey(getBaseUrl()) != endpointKey(baseUrl)) edit.remove(KEY_API_KEY)
+        edit.apply()
+    }
+
+    internal fun apiKeyFor(baseUrl: String): String? =
+        getApiKey()?.takeIf { endpointKey(getBaseUrl()) == endpointKey(baseUrl) }
+
+    internal fun githubRepository(): String? = prefs.getString(KEY_GITHUB_REPO, null)
+
+    internal fun githubToken(): String? = githubPrefsFor(appContext).getString(KEY_GITHUB_TOKEN, null)
+
+    internal fun saveGitHub(repository: String, token: String) {
+        if (token.isNotBlank()) githubPrefsFor(appContext).edit().putString(KEY_GITHUB_TOKEN, token.trim()).apply()
+        prefs.edit().putString(KEY_GITHUB_REPO, repository.trim()).apply()
+    }
+
+    internal fun clearGitHub() {
+        githubPrefsFor(appContext).edit().remove(KEY_GITHUB_TOKEN).apply()
+        prefs.edit().remove(KEY_GITHUB_REPO).apply()
+    }
+
+    internal fun contextTokens(): Int = prefs.getInt("context_budget_tokens", dev.codex.android.context.DEFAULT_CONTEXT_TOKENS)
+    internal fun setContextTokens(tokens: Int) { prefs.edit().putInt("context_budget_tokens", tokens).apply() }
+    internal fun autoCompact(): Boolean = prefs.getBoolean("auto_compact_chat", true)
+    internal fun setAutoCompact(enabled: Boolean) { prefs.edit().putBoolean("auto_compact_chat", enabled).apply() }
+
+    internal fun soulMarkdown(): String = prefs.getString("agent_soul_markdown", "").orEmpty()
+
+    internal fun saveSoulMarkdown(text: String): Boolean = prefs.edit().apply {
+        if (text.isBlank()) remove("agent_soul_markdown") else putString("agent_soul_markdown", text)
+    }.commit()
+
+    internal fun isMemoryRecallEnabled(): Boolean = prefs.getBoolean("memory_recall_enabled", true)
+
+    internal fun setMemoryRecallEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("memory_recall_enabled", enabled).apply()
     }
 
     /** True when a non-blank API key is stored. */

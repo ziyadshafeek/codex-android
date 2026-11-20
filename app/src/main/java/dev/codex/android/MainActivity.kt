@@ -10,6 +10,7 @@ import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.foundation.layout.Column
@@ -17,12 +18,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -43,22 +46,27 @@ import dev.codex.android.hooks.HookEngine
 import dev.codex.android.hooks.HookExecution
 import dev.codex.android.kb.KnowledgeBase
 import dev.codex.android.linux.ProotShellEngine
-import dev.codex.android.linux.RootfsManager
+import dev.codex.android.linux.RootfsBootstrap
 import dev.codex.android.mcp.JsonFileStdioConfigStore
 import dev.codex.android.mcp.McpHub
 import dev.codex.android.mcp.McpManager
+import dev.codex.android.security.ExecutionMode
 import dev.codex.android.server.CodexCli
 import dev.codex.android.server.DaemonAgentRunnerFactory
 import dev.codex.android.server.LocalDaemon
 import dev.codex.android.subagents.SubagentOrchestrator
 import dev.codex.android.terminal.TerminalStateHolder
-import dev.codex.android.tools.WorkspaceFileTools
+import dev.codex.android.ui.ApprovalDialog
+import dev.codex.android.ui.AutomationCreatorScreen
+import dev.codex.android.ui.AutomationListScreen
 import dev.codex.android.ui.ChatScreen
 import dev.codex.android.ui.ChatViewModel
+import dev.codex.android.ui.ComposerMode
 import dev.codex.android.ui.HelpScreen
 import dev.codex.android.ui.HistoryScreen
 import dev.codex.android.ui.OnboardingScreen
 import dev.codex.android.ui.PreviewScreen
+import dev.codex.android.ui.ReviewInboxScreen
 import dev.codex.android.ui.SettingsScreen
 import dev.codex.android.ui.ShareActivity
 import dev.codex.android.ui.StoreScreen
@@ -80,27 +88,7 @@ import java.util.UUID
 class MainActivity : ComponentActivity() {
     private val viewModel: ChatViewModel by viewModels()
 
-    /**
-     * Real agent runner for daemon turns (the ChatViewModel AgentLoop
-     * pattern, via DefaultSubagentLoopFactory — see
-     * [DaemonAgentRunnerFactory]). Created once per activity lifetime.
-     */
-    private val daemonRunnerFactory: DaemonAgentRunnerFactory by lazy {
-        DaemonAgentRunnerFactory(application)
-    }
-
-    /**
-     * Headless local daemon (M8): created once per activity lifetime
-     * so a rotation never rebinds port 8787 with a fresh token while
-     * the old socket is still bound. Started in [onCreate] (IO).
-     */
-    private val localDaemon: LocalDaemon by lazy {
-        LocalDaemon(
-            applicationContext,
-            CodexDatabase.getInstance(applicationContext),
-            runnerFactory = daemonRunnerFactory,
-        )
-    }
+    private val localDaemon: LocalDaemon get() = PhoneDaemon.get(application)
 
     /**
      * Unified MCP hub (M8): registered at the DI root with the real
@@ -170,13 +158,26 @@ class MainActivity : ComponentActivity() {
         // ChatViewModel.ensureThread). A failure here never crashes the
         // app: the chat still works, the daemon/CLI just stay down.
         lifecycleScope.launch(Dispatchers.IO) {
+            val linuxDir = File(filesDir, "linux")
+            // Prepare the host-side bind before the first shell can open.
+            runCatching { CodexCli.writeDaemonEnv(linuxDir, localDaemon.bearerToken) }
+            // Shell bootstrap must not block the Android-side daemon or workspace.
+            launch {
+                RootfsBootstrap.ensure(applicationContext)
+                RootfsBootstrap.status.collect { status ->
+                    if (status == RootfsBootstrap.Status.Ready) {
+                        runCatching {
+                            CodexCli.installIntoRootfs(
+                                rootfsDir = RootfsBootstrap.manager(applicationContext).rootfsDir(),
+                                linuxDir = linuxDir,
+                                bearerToken = localDaemon.bearerToken,
+                                port = LocalDaemon.DEFAULT_PORT,
+                            )
+                        }
+                    }
+                }
+            }
             runCatching {
-                CodexCli.installIntoRootfs(
-                    rootfsDir = RootfsManager(applicationContext).rootfsDir(),
-                    linuxDir = File(filesDir, "linux"),
-                    bearerToken = localDaemon.bearerToken,
-                    port = LocalDaemon.DEFAULT_PORT,
-                )
                 localDaemon.start()
                 mcpHub.listMcpServers()
                 CodexDatabase.getInstance(applicationContext).upsertWorkspace(
@@ -203,7 +204,10 @@ class MainActivity : ComponentActivity() {
                     var showOnboarding by remember {
                         mutableStateOf(!onboardingPrefs.isComplete())
                     }
-                    var showSettings by remember { mutableStateOf(false) }
+                    var showSettings by rememberSaveable { mutableStateOf(false) }
+                    var showAutomations by remember { mutableStateOf(false) }
+                    var createAutomation by remember { mutableStateOf(false) }
+                    var showReviewInbox by remember { mutableStateOf(false) }
                     var showHistory by remember { mutableStateOf(false) }
                     var showStore by remember { mutableStateOf(false) }
                     var showPreview by remember { mutableStateOf(false) }
@@ -213,6 +217,10 @@ class MainActivity : ComponentActivity() {
                     // created on the main thread and shared by the
                     // Preview tab and the agent's browser tools.
                     val browser = remember { VerificationBrowser(applicationContext) }
+                    DisposableEffect(browser) {
+                        viewModel.attachBrowser(browser)
+                        onDispose { viewModel.attachBrowser(null) }
+                    }
                     // Publish the shared browser for onDestroy teardown.
                     SideEffect { browserRef = browser }
                     // Composition root for the workbench engines (M2/M4/M6):
@@ -229,22 +237,20 @@ class MainActivity : ComponentActivity() {
                     val terminalStateHolder = remember { TerminalStateHolder() }
                     val terminalEngine = remember {
                         ProotShellEngine(
-                            rootfsDir = RootfsManager(applicationContext).rootfsDir(),
+                            rootfsDir = RootfsBootstrap.manager(applicationContext).rootfsDir(),
                             nativeLibDir = File(applicationInfo.nativeLibraryDir),
                             workspaceBindDir = workspaceDir,
                             // daemon.env extra bind (M8): the on-device
                             // `codex` CLI reads its port + token from
                             // /etc/codex/daemon.env inside the guest.
-                            // installIntoRootfs writes that file on every
-                            // boot (see onCreate); the bind is a path
-                            // pair, so the engine is safe to construct
-                            // before the file lands.
+                            // onCreate prepares the file on every boot;
+                            // the engine can be constructed before it lands.
                             extraBinds = listOf(
                                 File(filesDir, "linux/daemon.env").absolutePath to "/etc/codex/daemon.env",
                             ),
                         )
                     }
-                    val workspaceFiles = remember { WorkspaceFileTools(workspaceDir, proot = terminalEngine) }
+                    val workspaceFiles = remember { viewModel.workspaceFileTools }
                     // Snapshot engine (H3): one per workspace, baseline
                     // captured on Dispatchers.IO below — never on Main.
                     val snapshotEngine = remember { SnapshotEngine(workspaceDir, filesDir, true) }
@@ -331,11 +337,33 @@ class MainActivity : ComponentActivity() {
                                 onBack = { showHelp = false },
                             )
                         }
+                        createAutomation -> AutomationCreatorScreen(
+                            database = database,
+                            onSaved = { createAutomation = false },
+                            onBack = { createAutomation = false },
+                        )
+                        showReviewInbox -> ReviewInboxScreen(
+                            database = database,
+                            onBack = { showReviewInbox = false },
+                            onThreadClick = { id ->
+                                viewModel.openThread(id)
+                                showReviewInbox = false
+                                showAutomations = false
+                                showSettings = false
+                            },
+                        )
+                        showAutomations -> AutomationListScreen(
+                            database = database,
+                            onCreateClick = { createAutomation = true },
+                            onOpenReview = { showReviewInbox = true },
+                            onBack = { showAutomations = false },
+                        )
                         showSettings -> {
                             SettingsScreen(
                                 viewModel = viewModel,
                                 onBack = { showSettings = false },
                                 onOpenHelp = { showHelp = true },
+                                onOpenAutomations = { showAutomations = true },
                             )
                         }
                         showWorkbench -> {
@@ -356,13 +384,7 @@ class MainActivity : ComponentActivity() {
                                     terminalStateHolder = terminalStateHolder,
                                     snapshotEngine = snapshotEngine,
                                     onSelectThread = { threadId -> viewModel.openThread(threadId) },
-                                    // ChatViewModel.sendGoal runs an AUTO turn
-                                    // on the active thread; the composer's
-                                    // BUILD/PLAN mode is not plumbed through
-                                    // sendGoal (it takes no mode), so a
-                                    // workbench prompt always starts a real
-                                    // AUTO turn.
-                                    onSendPrompt = { prompt, _, _ -> viewModel.sendGoal(prompt) },
+                                    onSendPrompt = { prompt, mode, _ -> viewModel.sendGoal(prompt, mode.toExecutionMode()) },
                                     onOpenSettings = { showSettings = true },
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -386,7 +408,7 @@ class MainActivity : ComponentActivity() {
                                     terminalStateHolder = terminalStateHolder,
                                     snapshotEngine = snapshotEngine,
                                     onSelectThread = { threadId -> viewModel.openThread(threadId) },
-                                    onSendPrompt = { prompt, _, _ -> viewModel.sendGoal(prompt) },
+                                    onSendPrompt = { prompt, mode, _ -> viewModel.sendGoal(prompt, mode.toExecutionMode()) },
                                     onOpenSettings = { showSettings = true },
                                 )
                             } else {
@@ -400,6 +422,14 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
                         }
+                    }
+                    val pendingApproval by viewModel.pendingApproval.collectAsState()
+                    pendingApproval?.let { approval ->
+                        ApprovalDialog(
+                            approval,
+                            onApprove = { AgentRuntime.answerApproval(applicationContext, approval.approvalId, true) },
+                            onDeny = { AgentRuntime.answerApproval(applicationContext, approval.approvalId, false) },
+                        )
                     }
                 }
             }
@@ -425,4 +455,19 @@ class MainActivity : ComponentActivity() {
             ?: return
         viewModel.openThread(threadId)
     }
+}
+
+private fun ComposerMode.toExecutionMode(): ExecutionMode =
+    if (this == ComposerMode.PLAN) ExecutionMode.PLAN else ExecutionMode.AUTO
+
+/** Keep one port and bearer token when Android recreates the activity. */
+private object PhoneDaemon {
+    private var instance: LocalDaemon? = null
+
+    @Synchronized
+    fun get(app: android.app.Application): LocalDaemon = instance ?: LocalDaemon(
+        app,
+        CodexDatabase.getInstance(app),
+        runnerFactory = DaemonAgentRunnerFactory(app),
+    ).also { instance = it }
 }

@@ -1,5 +1,6 @@
 package dev.codex.android.linux
 
+import dev.codex.android.server.CodexCli
 import kotlinx.coroutines.runBlocking
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
@@ -12,14 +13,18 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
+import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Ignore
 import org.junit.Test
 import org.tukaani.xz.LZMA2Options
 import org.tukaani.xz.XZOutputStream
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
+import java.nio.file.Paths
 import java.util.zip.GZIPOutputStream
 
 /**
@@ -165,6 +170,147 @@ class ProotShellEngineTest {
         assertFalse(RootfsVerifier.verifySha256(placeholderFile, "PLACEHOLDER_HASH_TO_PIN"))
         assertFalse(RootfsVerifier.verifySha256(placeholderFile, ""))
         assertFalse(RootfsVerifier.verifySha256(placeholderFile, "zz".repeat(32)))
+    }
+
+    @Test
+    fun productionAlpineArchive_installsGuestShellAndCodexScript() = runBlocking {
+        assumeTrue("Live archive check is enabled by build.yml", System.getenv("CODEX_CI_VERIFY_ALPINE") == "1")
+        val artifact = RootfsManager.PINNED_ARTIFACTS.single { it.id == RootfsManager.ARTIFACT_ALPINE_ROOTFS }
+        val manager = RootfsManager(tempDir, nativeLibDir, artifacts = listOf(artifact))
+        val root = manager.ensureRootfs()
+
+        assertTrue(manager.isInstalled())
+        assertTrue(File(root, "bin/sh").canExecute())
+        assertTrue(File(root, "bin/busybox").canExecute())
+        assertTrue(File(root, "lib/ld-musl-aarch64.so.1").isFile)
+        assertTrue(File(root, "workspace").isDirectory)
+        assertTrue(File(root, "etc/codex").isDirectory)
+
+        val cli = CodexCli.installIntoRootfs(root, File(tempDir, "linux"), "ci-test-token")
+        assertEquals(File(root, "root/bin/codex"), cli)
+        assertTrue(cli.canExecute())
+        assertTrue(File(tempDir, "linux/daemon.env").isFile)
+        assertEquals(root, manager.ensureRootfs())
+        assertTrue(cli.isFile)
+    }
+
+    @Test
+    fun ensureRootfs_repairsShellAndDiscardsPartialInstallWithoutFollowingSymlinks() = runBlocking {
+        val payload = buildMinimalTarGz("bin/busybox" to "BUSYBOX")
+        val manager = rootfsManagerFor(payload)
+        val root = manager.rootfsDir()
+        val staleBin = File(root, "bin").apply { mkdirs() }
+        val staleFile = File(staleBin, "busybox").apply { writeText("stale busybox") }
+        Files.createSymbolicLink(File(staleBin, "sh").toPath(), Paths.get("missing"))
+        val outside = File(tempDir, "outside").apply { mkdir() }
+        val outsideFile = File(outside, "keep").apply { writeText("keep me") }
+        Files.createSymbolicLink(File(root, "outside-link").toPath(), outside.toPath())
+        val marker = File(root, ".codex_rootfs_ready").apply { writeText("stale marker") }
+        val engine = ProotShellEngine(root, nativeLibDir)
+        assertFalse(manager.isInstalled())
+        assertFalse(engine.hasRootfs())
+
+        manager.ensureRootfs()
+
+        assertTrue(manager.isInstalled())
+        assertTrue(engine.hasRootfs())
+        val sh = File(root, "bin/sh").toPath()
+        assertEquals(Paths.get("busybox"), Files.readSymbolicLink(sh))
+        assertEquals("BUSYBOX", staleFile.readText())
+        assertFalse(Files.isSymbolicLink(File(root, "outside-link").toPath()))
+        assertEquals("keep me", outsideFile.readText())
+        assertTrue(File(root, "workspace").isDirectory)
+        assertTrue(File(root, "etc/codex").isDirectory)
+        marker.delete()
+        assertFalse(engine.hasRootfs())
+    }
+
+    @Test
+    fun ensureRootfs_doesNotMarkAnArchiveWithoutShellOrBusyboxReady() = runBlocking {
+        val manager = rootfsManagerFor(buildMinimalTarGz("etc/os-release" to "Alpine"))
+        try {
+            manager.ensureRootfs()
+            fail("Expected IOException for a rootfs without /bin/sh")
+        } catch (e: IOException) {
+            assertTrue(e.message!!.contains("incomplete"))
+        }
+        assertFalse(manager.isInstalled())
+        assertFalse(File(manager.rootfsDir(), ".codex_rootfs_ready").exists())
+    }
+
+    @Test
+    fun ensureRootfs_usesMirrorAfterHttpFailureAndStillRequiresPinnedHash() = runBlocking {
+        val payload = buildMinimalTarGz("bin/busybox" to "BUSYBOX")
+        val requested = mutableListOf<String>()
+        val manager = rootfsManagerFor(payload, requestedHosts = requested)
+        manager.ensureRootfs()
+        manager.ensureRootfs()
+        assertTrue(manager.isInstalled())
+        assertEquals(listOf("primary.invalid", "mirror.invalid"), requested)
+
+        requested.clear()
+        val tampered = rootfsManagerFor("tampered".toByteArray(), RootfsVerifier.sha256Hex(payload), requested)
+        try {
+            tampered.ensureRootfs()
+            fail("Expected a hash mismatch for the mirror payload")
+        } catch (e: SecurityException) {
+            assertTrue(e.message!!.contains("SHA-256 verification failed"))
+        }
+        assertEquals(listOf("primary.invalid", "mirror.invalid"), requested)
+        assertFalse(tampered.rootfsDir().exists())
+    }
+
+    @Test
+    fun extractTarStream_preservesGnuLongNameAndLongLinkForTheSameSymlink() {
+        val target = "target-" + "a".repeat(110)
+        val name = "link-" + "b".repeat(110)
+        val tar = buildTar(
+            TarEntry(target.take(100), "$target\u0000".toByteArray(), 'L'),
+            TarEntry(target.take(100), "contents".toByteArray()),
+            TarEntry("././@LongLink", "$target\u0000".toByteArray(), 'K'),
+            TarEntry("././@LongLink", "$name\u0000".toByteArray(), 'L'),
+            TarEntry(name.take(100), type = '2', link = target.take(100)),
+            TarEntry("short-link", type = '2', link = "missing"),
+        )
+        assertEquals(3, RootfsVerifier.extractTarStreamSafely(ByteArrayInputStream(tar), rootfsDir))
+        assertEquals(Paths.get(target), Files.readSymbolicLink(File(rootfsDir, name).toPath()))
+        assertEquals("contents", File(rootfsDir, name).readText())
+        assertEquals(Paths.get("missing"), Files.readSymbolicLink(File(rootfsDir, "short-link").toPath()))
+    }
+
+    private fun rootfsManagerFor(
+        payload: ByteArray,
+        hash: String = RootfsVerifier.sha256Hex(payload),
+        requestedHosts: MutableList<String>? = null,
+    ): RootfsManager {
+        val client = OkHttpClient.Builder()
+            .addInterceptor(Interceptor { chain ->
+                val host = chain.request().url.host
+                requestedHosts?.add(host)
+                Response.Builder()
+                    .request(chain.request())
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(if (host == "primary.invalid") 503 else 200)
+                    .message("Fixture")
+                    .body(payload.toResponseBody("application/octet-stream".toMediaType()))
+                    .build()
+            })
+            .build()
+        return RootfsManager(
+            filesDir = Files.createTempDirectory(tempDir.toPath(), "app-").toFile(),
+            nativeLibDir = nativeLibDir,
+            httpClient = client,
+            artifacts = listOf(
+                PinnedArtifact(
+                    id = RootfsManager.ARTIFACT_ALPINE_ROOTFS,
+                    url = "https://primary.invalid/alpine.tar.gz",
+                    expectedSha256 = hash,
+                    license = "MIT",
+                    destinationRelativePath = "rootfs/",
+                    fallbackUrls = listOf("https://mirror.invalid/alpine.tar.gz"),
+                ),
+            ),
+        )
     }
 
     @Test
@@ -418,10 +564,20 @@ class ProotShellEngineTest {
         return gzOut.toByteArray()
     }
 
-    /** Creates a valid USTAR `.tar` byte array in pure Kotlin for unit tests. */
-    private fun buildMinimalTar(vararg entries: Pair<String, ByteArray>): ByteArray {
+    private data class TarEntry(
+        val name: String,
+        val data: ByteArray = byteArrayOf(),
+        val type: Char = '0',
+        val link: String = "",
+    )
+
+    private fun buildMinimalTar(vararg entries: Pair<String, ByteArray>): ByteArray =
+        buildTar(*entries.map { (name, data) -> TarEntry(name, data) }.toTypedArray())
+
+    /** Creates a tar fixture with regular files or GNU extension headers. */
+    private fun buildTar(vararg entries: TarEntry): ByteArray {
         val tarOut = ByteArrayOutputStream()
-        for ((name, data) in entries) {
+        for ((name, data, type, link) in entries) {
             val header = ByteArray(512)
             val nameBytes = name.toByteArray(Charsets.UTF_8)
             System.arraycopy(nameBytes, 0, header, 0, minOf(nameBytes.size, 100))
@@ -431,7 +587,8 @@ class ProotShellEngineTest {
             writeAscii(header, 124, "%011o\u0000".format(data.size))
             writeAscii(header, 136, "00000000000\u0000")
             for (i in 148 until 156) header[i] = ' '.code.toByte()
-            header[156] = '0'.code.toByte()
+            header[156] = type.code.toByte()
+            writeAscii(header, 157, link)
             writeAscii(header, 257, "ustar\u000000")
             val checksum = header.sumOf { it.toInt() and 0xFF }
             writeAscii(header, 148, "%06o\u0000 ".format(checksum))

@@ -1,6 +1,7 @@
 package dev.codex.android.subagents
 
 import android.content.Context
+import dev.codex.android.memory.PersonalMemory
 import dev.codex.android.agent.AgentEvent
 import dev.codex.android.agent.AgentLoop
 import dev.codex.android.agent.AgentRuntime
@@ -160,6 +161,7 @@ class DefaultSubagentLoopFactory(
             base.all().forEach { register(GlobGatedTool(it, effectiveRules)) }
         }
         val client = OkHttpOpenAiClient(baseUrl = baseUrl, apiKey = apiKey, model = model)
+        val memory = PersonalMemory(appContext)
         val loop = AgentLoop(
             client = client,
             tools = gated,
@@ -167,6 +169,8 @@ class DefaultSubagentLoopFactory(
             planStore = PlanStore(appContext),
             model = model,
             skills = skills,
+            recalledMemory = memory::recall,
+            soulMarkdown = memory::soulForAgent,
         )
         // Same event → TurnContext mapping as ChatViewModel.runAgentTurn:
         // one step per plan / model reply / tool start; approvals go through

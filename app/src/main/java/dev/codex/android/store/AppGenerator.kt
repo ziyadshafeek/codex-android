@@ -1,5 +1,6 @@
 package dev.codex.android.store
 
+import java.io.File
 import java.util.UUID
 
 /**
@@ -57,17 +58,20 @@ object AppGenerator {
         )
     }
 
-    /**
-     * Records a request to build [app] into an APK: returns the app with
-     * status [AppBuildStatus.BUILD_REQUESTED].
-     *
-     * This only records the request. The actual APK build via a build
-     * service / CI hook is a documented future step and is NOT performed
-     * here — there is no Gradle invocation, no upload, and no network call.
-     * Pure function, no I/O.
-     */
-    fun requestBuild(app: GeneratedApp): GeneratedApp =
-        app.copy(status = AppBuildStatus.BUILD_REQUESTED)
+    /** Saves the generated source into the phone workspace. No CI request is made. */
+    fun saveSource(app: GeneratedApp, workspace: File): String {
+        val relative = "generated/${app.id}"
+        val folder = File(workspace, relative).canonicalFile
+        require(folder.path.startsWith(workspace.canonicalPath + File.separator))
+        check(folder.mkdirs()) { "Could not create the source project directory" }
+        for ((path, content) in app.files) {
+            val file = File(folder, path).canonicalFile
+            require(file.path.startsWith(folder.path + File.separator))
+            file.parentFile?.mkdirs()
+            file.writeText(content)
+        }
+        return relative
+    }
 
     /**
      * Derives `com.codex.apps.<slug>` from an app name: lowercase, ASCII

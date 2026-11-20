@@ -23,9 +23,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /** Severity of one captured console / page-error entry. */
 enum class ConsoleLevel { LOG, INFO, WARN, ERROR, DEBUG }
@@ -75,6 +77,12 @@ object BrowserJs {
         } else {
             "https://$trimmed"
         }
+    }
+
+    fun webUrl(input: String): String? {
+        val url = normalizeUrl(input).toHttpUrlOrNull() ?: return null
+        if (url.username.isNotEmpty() || url.password.isNotEmpty()) return null
+        return url.toString()
     }
 
     /**
@@ -210,7 +218,7 @@ object BrowserJs {
             var tag = el.tagName.toLowerCase();
             var text = "";
             if (tag === "input" || tag === "textarea" || tag === "select") {
-              text = String(el.value || el.placeholder || "");
+              text = String(el.getAttribute("aria-label") || el.placeholder || "");
             } else {
               text = (el.textContent || "").replace(/\s+/g, " ").trim();
             }
@@ -341,6 +349,12 @@ class VerificationBrowser(context: Context) {
     /** Load progress 0..100 reported by the page. */
     val loadProgress: StateFlow<Int> = _loadProgress.asStateFlow()
 
+    private val _canGoBack = MutableStateFlow(false)
+    val canGoBack: StateFlow<Boolean> = _canGoBack.asStateFlow()
+
+    private val _pageError = MutableStateFlow<String?>(null)
+    val pageError: StateFlow<String?> = _pageError.asStateFlow()
+
     private val _consoleLogs = MutableStateFlow<List<ConsoleLogEntry>>(emptyList())
     /** Captured console messages + page errors, oldest first, capped. */
     val consoleLogs: StateFlow<List<ConsoleLogEntry>> = _consoleLogs.asStateFlow()
@@ -352,12 +366,15 @@ class VerificationBrowser(context: Context) {
         webView.webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
                 _currentUrl.value = url
+                _pageError.value = null
+                _pageTitle.value = ""
                 _isLoading.value = true
             }
 
             override fun onPageFinished(view: WebView, url: String) {
                 _currentUrl.value = url
                 _isLoading.value = false
+                _canGoBack.value = view.canGoBack()
                 // Navigation resets the page's JS world: re-install the hook.
                 view.evaluateJavascript(BrowserJs.buildErrorHookScript(), null)
             }
@@ -366,8 +383,8 @@ class VerificationBrowser(context: Context) {
                 view: WebView,
                 request: WebResourceRequest,
             ): Boolean {
-                // Keep every navigation inside this WebView.
-                return false
+                // Do not launch or render non-web schemes.
+                return request.url.scheme !in setOf("http", "https")
             }
 
             override fun onReceivedError(
@@ -376,10 +393,9 @@ class VerificationBrowser(context: Context) {
                 error: WebResourceError,
             ) {
                 if (request.isForMainFrame) {
-                    appendConsole(
-                        ConsoleLevel.ERROR,
-                        "Page error loading ${request.url}: ${error.description}",
-                    )
+                    _pageError.value = "Could not load the page: ${error.description}"
+                    _isLoading.value = false
+                    appendConsole(ConsoleLevel.ERROR, _pageError.value.orEmpty())
                 }
             }
 
@@ -389,10 +405,8 @@ class VerificationBrowser(context: Context) {
                 errorResponse: WebResourceResponse,
             ) {
                 if (request.isForMainFrame) {
-                    appendConsole(
-                        ConsoleLevel.ERROR,
-                        "HTTP ${errorResponse.statusCode} loading ${request.url}",
-                    )
+                    _pageError.value = "The page returned HTTP ${errorResponse.statusCode}."
+                    appendConsole(ConsoleLevel.ERROR, _pageError.value.orEmpty())
                 }
             }
         }
@@ -432,11 +446,23 @@ class VerificationBrowser(context: Context) {
      * actually loaded. Safe to call from any thread; runs on Main.
      */
     suspend fun loadUrl(rawUrl: String): String = withContext(Dispatchers.Main) {
-        val normalized = BrowserJs.normalizeUrl(rawUrl)
-        if (normalized.isNotEmpty()) {
-            webView.loadUrl(normalized)
-        }
+        val normalized = requireNotNull(BrowserJs.webUrl(rawUrl)) { "Enter a valid HTTP or HTTPS web address." }
+        _isLoading.value = true
+        _pageError.value = null
+        webView.loadUrl(normalized)
         normalized
+    }
+
+    suspend fun openAndWait(rawUrl: String): String {
+        val url = loadUrl(rawUrl)
+        withTimeoutOrNull(20_000) { isLoading.first { !it } }
+            ?: error("The page did not finish loading. Check Preview before retrying.")
+        pageError.value?.let { error(it) }
+        return currentUrl.value.ifBlank { url }
+    }
+
+    suspend fun goBack() = withContext(Dispatchers.Main) {
+        if (webView.canGoBack()) webView.goBack()
     }
 
     /** Reloads the current page. No-op when nothing has been loaded yet. */

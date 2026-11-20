@@ -23,4 +23,5 @@
          The AndroidKeyStore master key itself is never part of app backup. -->
     <exclude domain="sharedpref" path="codex_keys.xml" />
     <exclude domain="sharedpref" path="codex_keys_fallback.xml" />
+    <exclude domain="sharedpref" path="codex_github_keys.xml" />
 </full-backup-content>

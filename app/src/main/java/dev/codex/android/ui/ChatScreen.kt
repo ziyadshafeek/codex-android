@@ -39,6 +39,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import dev.codex.android.context.contextTokens
 import dev.codex.android.agent.AgentRuntime
 import dev.codex.android.voice.VoiceInput
 
@@ -56,10 +57,10 @@ fun ChatScreen(
     val isRunning by viewModel.isRunning.collectAsState()
     val activeThreadId by viewModel.activeThreadId.collectAsState()
     val hasKey by viewModel.hasKey.collectAsState()
+    val compacting by viewModel.compacting.collectAsState()
     val rateLimitCountdown by viewModel.rateLimitCountdown.collectAsState()
-    val pending by viewModel.gate.pending.collectAsState()
     val listState = rememberLazyListState()
-    var text by remember { mutableStateOf("") }
+    var text by remember(activeThreadId) { mutableStateOf("") }
 
     // M8 voice input + M1 Stop/Steer composer controls. The composable
     // calls AgentRuntime directly for stop/steer; the ViewModel-level
@@ -264,6 +265,13 @@ fun ChatScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = { text = ""; viewModel.newChat() }, enabled = !isRunning && !compacting,
+                    modifier = Modifier.testTag("chat_new")) { Text("New chat") }
+                TextButton(onClick = viewModel::compactChat, enabled = activeThreadId != null && !isRunning && !compacting,
+                    modifier = Modifier.testTag("chat_compact")) { Text(if (compacting) "Summarising…" else "Summarise") }
+                if (text.isNotBlank()) Text("Draft ~${contextTokens(text)} tokens", style = MaterialTheme.typography.labelSmall)
+            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -317,7 +325,7 @@ fun ChatScreen(
                         }
                         text = ""
                     },
-                    enabled = text.isNotBlank() && (!isRunning || activeThreadId != null),
+                    enabled = !compacting && text.isNotBlank() && (!isRunning || activeThreadId != null),
                     modifier = Modifier.padding(start = 8.dp).testTag("chat_send")
                 ) {
                     Text(if (isRunning) "Steer" else "Send")
@@ -340,11 +348,4 @@ fun ChatScreen(
         }
     }
 
-    if (pending != null) {
-        ApprovalDialog(
-            action = pending!!,
-            onApprove = { viewModel.approvePending(true) },
-            onDeny = { viewModel.approvePending(false) }
-        )
-    }
 }

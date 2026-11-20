@@ -4,6 +4,7 @@ import android.graphics.BitmapFactory
 import dev.codex.android.tools.Tool
 import dev.codex.android.tools.ToolResult
 import java.io.File
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
@@ -79,14 +80,16 @@ class BrowserOpenTool(private val browser: VerificationBrowser) : Tool {
         },
         required = listOf("url"),
     )
-    override val sensitive: Boolean = false
+    override val sensitive: Boolean = true
 
     override suspend fun execute(args: JsonObject): ToolResult {
         val url = requiredString(args, "url")
             ?: return ToolResult(ok = false, output = "", error = "Missing required argument: url")
         return try {
-            val loaded = browser.loadUrl(url)
+            val loaded = browser.openAndWait(url)
             ToolResult(ok = true, output = "Opened $loaded")
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             ToolResult(ok = false, output = "", error = e.message ?: "Failed to open $url")
         }

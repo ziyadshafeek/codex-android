@@ -3,7 +3,7 @@ package dev.codex.android.data
 import android.content.ContentValues
 import android.content.Context
 import android.database.Cursor
-import android.database.sqlite.SQLiteDatabase
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -24,6 +24,7 @@ class MemoryStore(context: Context) {
     companion object {
         /** Maximum rows kept in `messages`; older rows are pruned on insert. */
         const val MAX_MESSAGES = 500
+        const val MAX_FACTS = 200
     }
 
     // One shared database: getInstance, never a second helper — a
@@ -96,32 +97,39 @@ class MemoryStore(context: Context) {
         }
     }
 
-    /**
-     * Upserts a fact by [key] (INSERT OR REPLACE) and stamps `updated_at`.
-     * Blank [key] or [value] is ignored, not stored.
-     */
-    suspend fun saveFact(key: String, value: String, source: String = "user") =
+    /** Preserve creation time on edits and bound storage in the same transaction. */
+    suspend fun saveFact(key: String, value: String, source: String = "user"): Boolean =
         withContext(Dispatchers.IO) {
+            if (key.isBlank() || value.isBlank()) return@withContext false
             try {
-                if (key.isBlank() || value.isBlank()) return@withContext
-                val now = System.currentTimeMillis()
-                val values = ContentValues().apply {
-                    put("key", key)
-                    put("value", value)
-                    put("source", source)
-                    put("created_at", now)
-                    put("updated_at", now)
+                val db = dbHelper.writableDatabase
+                db.beginTransaction()
+                try {
+                    val now = System.currentTimeMillis()
+                    val values = ContentValues().apply {
+                        put("value", value)
+                        put("source", source)
+                        put("updated_at", now)
+                    }
+                    val updated = db.update(CodexDatabase.TABLE_FACTS, values, "key = ?", arrayOf(key)) != 0
+                    val saved = if (updated) true else {
+                        val count = db.rawQuery("SELECT count(*) FROM ${CodexDatabase.TABLE_FACTS}", null)
+                            .use { it.moveToFirst(); it.getInt(0) }
+                        if (count >= MAX_FACTS) false else {
+                            values.put("key", key)
+                            values.put("created_at", now)
+                            db.insertOrThrow(CodexDatabase.TABLE_FACTS, null, values) != -1L
+                        }
+                    }
+                    db.setTransactionSuccessful()
+                    saved
+                } finally {
+                    db.endTransaction()
                 }
-                dbHelper.writableDatabase.let { db ->
-                    db.insertWithOnConflict(
-                        CodexDatabase.TABLE_FACTS,
-                        null,
-                        values,
-                        SQLiteDatabase.CONFLICT_REPLACE,
-                    )
-                }
-            } catch (e: Exception) {
-                // Swallowed by design.
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                false
             }
         }
 
@@ -166,16 +174,62 @@ class MemoryStore(context: Context) {
         }
     }
 
-    /** Deletes the fact stored under [key] (no-op when absent). Never throws. */
-    suspend fun deleteFact(key: String) = withContext(Dispatchers.IO) {
+    /** True only if a row was removed. */
+    suspend fun deleteFact(key: String): Boolean = deleteFacts("key = ? AND source = ?", arrayOf(key, "user")) > 0
+
+    /** True when the database operation succeeded, even if already empty. */
+    suspend fun clearFacts(): Boolean = deleteFacts("source = ?", arrayOf("user")) >= 0
+
+    private suspend fun deleteFacts(where: String?, args: Array<String>?): Int = withContext(Dispatchers.IO) {
         try {
-            dbHelper.writableDatabase.let { db ->
-                db.delete(CodexDatabase.TABLE_FACTS, "key = ?", arrayOf(key))
-            }
-        } catch (e: Exception) {
-            // Ignored.
+            dbHelper.writableDatabase.delete(CodexDatabase.TABLE_FACTS, where, args)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            -1
         }
     }
+
+    internal enum class ReplaceResult { SAVED, CHANGED, FAILED }
+
+    /** Update only user notes. Abort if anything changed while the editor was open. */
+    internal suspend fun replaceUserFacts(expected: Map<String, String>, updated: Map<String, String>): ReplaceResult =
+        withContext(Dispatchers.IO) {
+            try {
+                val db = dbHelper.writableDatabase
+                db.beginTransaction()
+                try {
+                    val saved = db.query(CodexDatabase.TABLE_FACTS, arrayOf("key", "value"), "source = ?",
+                        arrayOf("user"), null, null, null).use { cursor ->
+                        buildMap { while (cursor.moveToNext()) put(cursor.getString(0), cursor.getString(1)) }
+                    }
+                    if (expected != saved) return@withContext ReplaceResult.CHANGED
+                    val now = System.currentTimeMillis()
+                    for (key in saved.keys - updated.keys) {
+                        db.delete(CodexDatabase.TABLE_FACTS, "key = ? AND source = ?", arrayOf(key, "user"))
+                    }
+                    for ((key, text) in updated) {
+                        if (saved[key] == text) continue
+                        val values = ContentValues().apply { put("value", text); put("updated_at", now) }
+                        if (key in saved) db.update(CodexDatabase.TABLE_FACTS, values, "key = ? AND source = ?", arrayOf(key, "user"))
+                        else {
+                            values.put("key", key)
+                            values.put("source", "user")
+                            values.put("created_at", now)
+                            db.insertOrThrow(CodexDatabase.TABLE_FACTS, null, values)
+                        }
+                    }
+                    db.setTransactionSuccessful()
+                    ReplaceResult.SAVED
+                } finally {
+                    db.endTransaction()
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                ReplaceResult.FAILED
+            }
+        }
 
     /**
      * Facts whose `key` OR `value` contains [query] (case-insensitive LIKE).

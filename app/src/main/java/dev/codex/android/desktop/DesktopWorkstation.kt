@@ -122,6 +122,13 @@ fun DesktopWorkstation(
             onSelectThread = onSelectThread,
             onSendPrompt = onSendPrompt,
             onOpenSettings = onOpenSettings,
+            browserTabContent = {
+                if (mode == DesktopLayoutMode.THREE_PANE || (mode == DesktopLayoutMode.TWO_PANE && activePane == 0)) {
+                    Text("Preview is open in the adjacent panel.", modifier = Modifier.padding(16.dp))
+                } else {
+                    PreviewScreen(browser = browser)
+                }
+            },
             modifier = workbenchModifier,
         )
     }

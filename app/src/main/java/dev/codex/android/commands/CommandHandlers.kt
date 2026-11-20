@@ -184,8 +184,10 @@ object CommandHandlers {
     // --- /compact ---
 
     private suspend fun handleCompact(ctx: CommandContext, parsed: ParsedCommand): SlashResult {
-        val messages = ctx.db.getMessages(ctx.threadId, limit = 200)
-        val contentMessages = messages.filter { it.kind != "summary" }
+        val previous = ctx.db.getMessages(ctx.threadId, limit = 1, mostRecent = true, kind = "summary").lastOrNull()
+        val contentMessages = ctx.db.getMessages(ctx.threadId, limit = 200, mostRecent = true)
+            .filter { it.id > (previous?.id ?: 0) && it.kind == "text" && it.role in setOf("user", "assistant") }
+        val messages = listOfNotNull(previous) + contentMessages
         if (contentMessages.isEmpty()) {
             return SlashResult("Nothing to compact yet — this thread has no messages.")
         }
@@ -193,7 +195,7 @@ object CommandHandlers {
             ?: return SlashResult(PROVIDER_NEEDED_COMPACT)
         return when (summary) {
             is SummariseResult.Ok -> {
-                val summaryText = summary.text.trim()
+                val summaryText = summary.text.trim().take(8000)
                 if (summaryText.isBlank()) {
                     return SlashResult("Compaction failed: the model returned an empty summary.")
                 }
@@ -587,9 +589,18 @@ object CommandHandlers {
 
     /** Pure summarise-prompt builder, JVM-testable. Transcript is capped so the prompt stays bounded. */
     internal fun buildSummaryPrompt(messages: List<TimelineMessage>, maxChars: Int = 12_000): String {
-        val transcript = messages
-            .joinToString("\n") { "${it.role}: ${it.content}" }
-            .take(maxChars)
+        val priorSummary = messages.firstOrNull()?.takeIf { it.kind == "summary" }
+            ?.let { "Summary: ${it.content.take(maxChars / 3)}\n" }.orEmpty()
+        var remaining = maxChars - priorSummary.length
+        val recent = mutableListOf<String>()
+        for (message in messages.asReversed()) {
+            if (message.kind == "summary") continue
+            if (remaining <= 0) break
+            val line = "${message.role}: ${message.content.take(2400)}".take(remaining)
+            recent += line
+            remaining -= line.length + 1
+        }
+        val transcript = priorSummary + recent.asReversed().joinToString("\n")
         return "Summarise the conversation below into a compact handoff note. " +
             "Keep the user's goal, key decisions, files changed, open questions, " +
             "and anything needed to continue. Be concise and factual; do not invent details.\n\n" +

@@ -17,10 +17,7 @@ enum class AppBuildStatus {
  *
  * [files] maps a relative path (e.g.
  * `"app/src/main/java/com/codex/apps/mycounter/MainActivity.kt"`) to that
- * file's full source text. This is a GENERATOR output only: nothing here
- * runs Gradle or builds an APK on the phone. Turning these files into an
- * APK is a future step via a build service / CI hook (see
- * [AppGenerator.requestBuild]).
+ * file's full source text. The generator does not submit or run builds.
  */
 @Serializable
 data class GeneratedApp(

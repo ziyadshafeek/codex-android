@@ -36,6 +36,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -45,6 +46,7 @@ import com.termux.terminal.TerminalSessionClient
 import com.termux.view.TerminalView
 import com.termux.view.TerminalViewClient
 import dev.codex.android.linux.ProotShellEngine
+import dev.codex.android.linux.RootfsBootstrap
 import dev.codex.android.linux.ShellResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -198,25 +200,41 @@ fun TerminalScreen(
         }
     }
 
-    fun openNewTab() {
-        val created = engine.startPtySession(
-            cols = 80,
-            rows = 24,
-            sessionClient = sessionClient,
-        )
-        stateHolder.addTab(created.id, created.title)
+    val appContext = LocalContext.current.applicationContext
+    val rootfsStatus by RootfsBootstrap.status.collectAsState()
+    var openingTab by remember(engine) { mutableStateOf(false) }
+
+    suspend fun openNewTabWhenReady(retry: Boolean = false) {
+        if (openingTab) return
+        openingTab = true
+        try {
+            if (!RootfsBootstrap.ensure(appContext, retry)) return
+            val created = engine.startPtySession(
+                cols = 80,
+                rows = 24,
+                sessionClient = sessionClient,
+            )
+            stateHolder.addTab(created.id, created.title)
+        } finally {
+            openingTab = false
+        }
     }
 
-    // Ensure at least one PTY tab exists on first open.
+    fun openNewTab() {
+        scope.launch { openNewTabWhenReady() }
+    }
+
+    // All paths to a new PTY share the same setup gate.
     LaunchedEffect(engine) {
         val existing = engine.listSessions()
         if (existing.isEmpty()) {
-            openNewTab()
+            openNewTabWhenReady()
         } else if (uiState.tabs.isEmpty()) {
             existing.forEach { stateHolder.addTab(it.id, it.title) }
         }
     }
 
+    val canOpenTab = !openingTab && rootfsStatus == RootfsBootstrap.Status.Ready
     val activePty = remember(uiState.activeSessionId, uiState.tabs) {
         engine.listSessions().firstOrNull { it.id == uiState.activeSessionId }
     }
@@ -253,6 +271,7 @@ fun TerminalScreen(
             }
             OutlinedButton(
                 onClick = ::openNewTab,
+                enabled = canOpenTab,
                 modifier = Modifier.testTag("terminal_new_tab"),
             ) {
                 Text("+ Tab", fontFamily = FontFamily.Monospace)
@@ -280,6 +299,34 @@ fun TerminalScreen(
             ) {
                 Text("Diag", fontFamily = FontFamily.Monospace)
             }
+        }
+
+        when (val status = rootfsStatus) {
+            RootfsBootstrap.Status.Installing -> Text(
+                text = "Setting up Linux for first use. Internet access is required.",
+                color = TerminalAmber,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier.fillMaxWidth().background(TerminalSurface).padding(8.dp),
+            )
+            is RootfsBootstrap.Status.Failed -> Row(
+                modifier = Modifier.fillMaxWidth().background(TerminalSurface).padding(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Linux setup failed: ${status.message}",
+                    color = TerminalAmber,
+                    fontFamily = FontFamily.Monospace,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(
+                    onClick = { scope.launch { openNewTabWhenReady(retry = true) } },
+                    enabled = !openingTab,
+                    modifier = Modifier.testTag("terminal_setup_retry"),
+                ) {
+                    Text("Retry", fontFamily = FontFamily.Monospace)
+                }
+            }
+            else -> Unit
         }
 
         // Live VT100 TerminalView (Apache 2.0)
@@ -328,6 +375,7 @@ fun TerminalScreen(
                     )
                     OutlinedButton(
                         onClick = ::openNewTab,
+                        enabled = canOpenTab,
                         modifier = Modifier.testTag("terminal_start_shell"),
                     ) {
                         Text("Start shell", fontFamily = FontFamily.Monospace)
@@ -381,6 +429,7 @@ fun TerminalScreen(
                 modifier = Modifier.weight(1f).testTag("terminal_bang_input"),
             )
             TextButton(
+                enabled = rootfsStatus == RootfsBootstrap.Status.Ready,
                 onClick = {
                     val raw = quickCmd.trim()
                     if (raw.isEmpty()) return@TextButton

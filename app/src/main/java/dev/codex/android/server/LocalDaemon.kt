@@ -216,6 +216,7 @@ class LocalDaemon(
     fun isRunning(): Boolean = serverSocket?.isBound == true && serverSocket?.isClosed == false
 
     /** Starts listening on 127.0.0.1:[port]. Safe to call after [stop]. */
+    @Synchronized
     fun start() {
         if (isRunning()) return
         if (scopeJob.isCancelled) {
@@ -238,6 +239,7 @@ class LocalDaemon(
     }
 
     /** Stops listening. In-flight turns are cancelled via the runtime. */
+    @Synchronized
     fun stop() {
         runCatching { serverSocket?.close() }
         serverSocket = null

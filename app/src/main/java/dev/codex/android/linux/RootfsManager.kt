@@ -1,7 +1,11 @@
 package dev.codex.android.linux
 
 import android.content.Context
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -15,7 +19,13 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
+import java.nio.file.FileVisitResult
 import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.Path
+import java.nio.file.Paths
+import java.nio.file.SimpleFileVisitor
+import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 import java.util.zip.GZIPInputStream
@@ -66,6 +76,8 @@ data class PinnedArtifact(
     val license: String,
     val destinationRelativePath: String,
     val extractedBinaries: List<ExtractedBinary> = emptyList(),
+    /** HTTPS mirrors tried in order on download failure, with the same pinned SHA-256. */
+    val fallbackUrls: List<String> = emptyList(),
 )
 
 /**
@@ -132,7 +144,7 @@ object RootfsVerifier {
 
     /**
      * Pure-Kotlin USTAR/PAX `.tar.gz` extractor for Alpine minirootfs tarballs.
-     * Supports regular files, directories, GNU LongName (`L`), and safe relative
+     * Supports regular files, directories, GNU LongName/LongLink (`L`/`K`), and safe relative
      * symlinks (symlinks escaping [destDir] are skipped). Never runs as root.
      */
     fun extractTarGzSafely(tarGzFile: File, destDir: File): Int {
@@ -149,25 +161,26 @@ object RootfsVerifier {
         val destCanonical = destDir.canonicalFile
         val header = ByteArray(512)
         var pendingLongName: String? = null
+        var pendingLongLink: String? = null
         var count = 0
 
         while (true) {
             val read = readFully(input, header)
             if (read < 512 || header.all { it == 0.toByte() }) break
 
-            val rawName = pendingLongName ?: parseTarName(header)
-            pendingLongName = null
             val typeFlag = header[156].toInt().toChar()
             val size = parseOctal(header, 124, 12)
             val mode = parseOctal(header, 100, 8).toInt()
             val padding = ((512L - (size % 512L)) % 512L)
 
-            if (typeFlag == 'L') {
-                // GNU LongName extension: payload holds the next entry's full path.
-                val nameBytes = ByteArray(size.toInt())
-                readFully(input, nameBytes)
+            if (typeFlag == 'L' || typeFlag == 'K') {
+                // These headers can appear together and belong to the next real entry.
+                if (size !in 1L..1_048_576L) throw IOException("Invalid GNU tar extension size: $size")
+                val bytes = ByteArray(size.toInt())
+                if (readFully(input, bytes) != bytes.size) throw IOException("Truncated GNU tar extension")
                 skipExact(input, padding)
-                pendingLongName = String(nameBytes, Charsets.UTF_8).trimEnd('\u0000', '\n')
+                val value = String(bytes, Charsets.UTF_8).trimEnd('\u0000', '\n')
+                if (typeFlag == 'L') pendingLongName = value else pendingLongLink = value
                 continue
             }
 
@@ -177,6 +190,10 @@ object RootfsVerifier {
                 continue
             }
 
+            val rawName = pendingLongName ?: parseTarName(header)
+            val linkTarget = pendingLongLink ?: parseCString(header, 157, 100)
+            pendingLongName = null
+            pendingLongLink = null
             val normalizedName = rawName.trim().removePrefix("./")
             if (normalizedName.isEmpty() || normalizedName == ".") {
                 skipExact(input, size + padding)
@@ -211,7 +228,6 @@ object RootfsVerifier {
                     // rootfs, not at the host root. Counted only when the
                     // link is actually created.
                     skipExact(input, size + padding)
-                    val linkTarget = parseCString(header, 157, 100)
                     if (linkTarget.isNotBlank()) {
                         val safeTarget = safeSymlinkTarget(destCanonical, target, linkTarget)
                         if (safeTarget != null) {
@@ -485,11 +501,7 @@ class RootfsManager internal constructor(
     fun nativeExecutableDir(): File = nativeLibDir
 
     /** True when the Alpine rootfs has been extracted and marked ready. */
-    fun isInstalled(): Boolean {
-        val root = rootfsDir()
-        return File(root, INSTALLED_MARKER).isFile &&
-            (File(root, "bin/sh").exists() || File(root, "bin/busybox").exists())
-    }
+    fun isInstalled(): Boolean = isReadyRootfs(rootfsDir())
 
     /**
      * Downloads, SHA-256 verifies, and extracts the ARM64 Alpine minirootfs plus
@@ -515,6 +527,7 @@ class RootfsManager internal constructor(
                 }
             }
 
+            if (!hasShell(root)) throw IOException("Rootfs extraction incomplete: no bin/sh")
             File(root, INSTALLED_MARKER).writeText("alpine-minirootfs-aarch64\n")
             root
         }
@@ -523,19 +536,69 @@ class RootfsManager internal constructor(
     /** Downloads, verifies, and extracts the Alpine minirootfs tarball. */
     private fun ensureAlpineArtifact(artifact: PinnedArtifact, downloadCache: File, root: File) {
         val downloaded = File(downloadCache, "${artifact.id}.download")
-        downloadHttps(artifact.url, downloaded)
         try {
+            downloadWithFallbacks(listOf(artifact.url) + artifact.fallbackUrls, downloaded)
             if (!RootfsVerifier.verifySha256(downloaded, artifact.expectedSha256)) {
                 throw SecurityException(
                     "SHA-256 verification failed for ${artifact.id} (expected=${artifact.expectedSha256}). " +
                         "Download aborted and deleted.",
                 )
             }
-            root.mkdirs()
+            // Discard partial installs, without following symlinks in the old tree.
+            deleteIncompleteRootfs(root.toPath())
             RootfsVerifier.extractTarGzSafely(downloaded, root)
+            repairShell(root)
             writeDefaultResolvConf(root)
+            // PRoot's guest bind targets must exist, even without a workspace bind.
+            for (dir in listOf("dev", "proc", "sys", "tmp", "root", "workspace", "etc/codex")) {
+                Files.createDirectories(File(root, dir).toPath())
+            }
         } finally {
             downloaded.delete()
+        }
+    }
+
+    private fun downloadWithFallbacks(urls: List<String>, destination: File) {
+        var failure: IOException? = null
+        for (url in urls) {
+            try {
+                downloadHttps(url, destination)
+                return
+            } catch (e: IOException) {
+                failure = e
+                destination.delete()
+            }
+        }
+        throw IOException("All download mirrors failed: ${failure?.message}", failure)
+    }
+
+    private fun deleteIncompleteRootfs(path: Path) {
+        if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) return
+        Files.walkFileTree(path, object : SimpleFileVisitor<Path>() {
+            override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+                Files.delete(file)
+                return FileVisitResult.CONTINUE
+            }
+
+            override fun postVisitDirectory(dir: Path, exc: IOException?): FileVisitResult {
+                if (exc != null) throw exc
+                Files.delete(dir)
+                return FileVisitResult.CONTINUE
+            }
+        })
+    }
+
+    private fun repairShell(root: File) {
+        if (hasShell(root)) return
+        val sh = File(root, "bin/sh").toPath()
+        val busybox = File(root, "bin/busybox")
+        if (busybox.isFile) {
+            busybox.setExecutable(true, false)
+            Files.deleteIfExists(sh)
+            Files.createSymbolicLink(sh, Paths.get("busybox"))
+        }
+        if (!hasShell(root)) {
+            throw IOException("Rootfs extraction incomplete: no bin/sh or bin/busybox")
         }
     }
 
@@ -617,6 +680,11 @@ class RootfsManager internal constructor(
 
         private const val INSTALLED_MARKER = ".codex_rootfs_ready"
 
+        internal fun isReadyRootfs(root: File): Boolean =
+            File(root, INSTALLED_MARKER).isFile && hasShell(root)
+
+        private fun hasShell(root: File): Boolean = File(root, "bin/sh").isFile
+
         /**
          * Official HTTPS release URLs + pinned SHA-256 table.
          *
@@ -650,6 +718,9 @@ class RootfsManager internal constructor(
                 expectedSha256 = "041fa34a81788242df9e78fa69b97ab45b8ec47ddbf88864755610414a7bf3de",
                 license = "MIT / Alpine",
                 destinationRelativePath = "rootfs/",
+                fallbackUrls = listOf(
+                    "https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/aarch64/alpine-minirootfs-3.20.3-aarch64.tar.gz",
+                ),
             ),
             PinnedArtifact(
                 id = ARTIFACT_PROOT_DEB,
@@ -728,5 +799,52 @@ class RootfsManager internal constructor(
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(120, TimeUnit.SECONDS)
             .build()
+    }
+}
+
+/** Coordinates first-run setup and status for app startup and the Terminal tab. */
+object RootfsBootstrap {
+    sealed interface Status {
+        object Idle : Status
+        object Installing : Status
+        object Ready : Status
+        data class Failed(val message: String) : Status
+    }
+
+    private val _status = MutableStateFlow<Status>(Status.Idle)
+    val status: StateFlow<Status> = _status.asStateFlow()
+    private val mutex = Mutex()
+
+    @Volatile
+    private var sharedManager: RootfsManager? = null
+
+    fun manager(context: Context): RootfsManager =
+        sharedManager ?: synchronized(this) {
+            sharedManager ?: RootfsManager(context.applicationContext).also { sharedManager = it }
+        }
+
+    /** Waits for any in-flight setup; after a failure only an explicit Retry starts it again. */
+    suspend fun ensure(context: Context, retry: Boolean = false): Boolean = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            val mgr = manager(context)
+            if (mgr.isInstalled()) {
+                _status.value = Status.Ready
+                return@withLock true
+            }
+            if (!retry && _status.value is Status.Failed) return@withLock false
+
+            _status.value = Status.Installing
+            try {
+                mgr.ensureRootfs()
+                _status.value = Status.Ready
+                true
+            } catch (e: CancellationException) {
+                _status.value = Status.Idle
+                throw e
+            } catch (e: Exception) {
+                _status.value = Status.Failed(e.message ?: e.javaClass.simpleName)
+                false
+            }
+        }
     }
 }
