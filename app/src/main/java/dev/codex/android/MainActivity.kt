@@ -5,6 +5,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
 import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.CoroutineStart
@@ -75,6 +76,7 @@ import java.util.UUID
  * [OnboardingPrefs]); onboarding is skippable on every step and never
  * blocks the chat. A History screen is reachable from the chat.
  */
+@OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
 class MainActivity : ComponentActivity() {
     private val viewModel: ChatViewModel by viewModels()
 
