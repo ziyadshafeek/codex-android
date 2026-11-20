@@ -302,12 +302,8 @@ open class ProotShellEngine(
         return env
     }
 
-    /** True when the Alpine rootfs has been extracted (bin/sh or bin/busybox present). */
-    fun hasRootfs(): Boolean {
-        val root = rootfsDir
-        return root.isDirectory &&
-            (File(root, "bin/sh").isFile || File(root, "bin/busybox").isFile)
-    }
+    /** True when setup has completed and the guest shell resolves to a file. */
+    fun hasRootfs(): Boolean = RootfsManager.isReadyRootfs(rootfsDir)
 
     /**
      * Runs [command] inside the PRoot rootfs in an isolated child process with
@@ -524,7 +520,7 @@ open class ProotShellEngine(
         val envPairs = buildProotEnvironment().entries.map { (k, v) -> "$k=$v" }.toTypedArray()
         val workDir = workspaceBindDir ?: rootfsDir
 
-        val termuxSession: TerminalSession? = if (sessionClient != null && prootBinary().isFile) {
+        val termuxSession: TerminalSession? = if (sessionClient != null && hasRootfs() && prootBinary().isFile) {
             runCatching {
                 // Full argv: JNI_createSubprocess builds the child argv
                 // ONLY from this array and execvp()s it — nothing prepends

@@ -10,6 +10,7 @@ import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.foundation.layout.Column
@@ -43,7 +44,7 @@ import dev.codex.android.hooks.HookEngine
 import dev.codex.android.hooks.HookExecution
 import dev.codex.android.kb.KnowledgeBase
 import dev.codex.android.linux.ProotShellEngine
-import dev.codex.android.linux.RootfsManager
+import dev.codex.android.linux.RootfsBootstrap
 import dev.codex.android.mcp.JsonFileStdioConfigStore
 import dev.codex.android.mcp.McpHub
 import dev.codex.android.mcp.McpManager
@@ -170,10 +171,18 @@ class MainActivity : ComponentActivity() {
         // ChatViewModel.ensureThread). A failure here never crashes the
         // app: the chat still works, the daemon/CLI just stay down.
         lifecycleScope.launch(Dispatchers.IO) {
+            val linuxDir = File(filesDir, "linux")
+            // Prepare the host-side bind before the first shell can open.
+            runCatching { CodexCli.writeDaemonEnv(linuxDir, localDaemon.bearerToken) }
+            // Extraction replaces an incomplete rootfs, so install the CLI only
+            // after setup succeeds (including after a retry from Terminal).
+            if (!RootfsBootstrap.ensure(applicationContext)) {
+                RootfsBootstrap.status.first { it == RootfsBootstrap.Status.Ready }
+            }
             runCatching {
                 CodexCli.installIntoRootfs(
-                    rootfsDir = RootfsManager(applicationContext).rootfsDir(),
-                    linuxDir = File(filesDir, "linux"),
+                    rootfsDir = RootfsBootstrap.manager(applicationContext).rootfsDir(),
+                    linuxDir = linuxDir,
                     bearerToken = localDaemon.bearerToken,
                     port = LocalDaemon.DEFAULT_PORT,
                 )
@@ -229,16 +238,14 @@ class MainActivity : ComponentActivity() {
                     val terminalStateHolder = remember { TerminalStateHolder() }
                     val terminalEngine = remember {
                         ProotShellEngine(
-                            rootfsDir = RootfsManager(applicationContext).rootfsDir(),
+                            rootfsDir = RootfsBootstrap.manager(applicationContext).rootfsDir(),
                             nativeLibDir = File(applicationInfo.nativeLibraryDir),
                             workspaceBindDir = workspaceDir,
                             // daemon.env extra bind (M8): the on-device
                             // `codex` CLI reads its port + token from
                             // /etc/codex/daemon.env inside the guest.
-                            // installIntoRootfs writes that file on every
-                            // boot (see onCreate); the bind is a path
-                            // pair, so the engine is safe to construct
-                            // before the file lands.
+                            // onCreate prepares the file on every boot;
+                            // the engine can be constructed before it lands.
                             extraBinds = listOf(
                                 File(filesDir, "linux/daemon.env").absolutePath to "/etc/codex/daemon.env",
                             ),
