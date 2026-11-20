@@ -107,8 +107,15 @@ class AttachmentIntegrationTest {
                 assertTrue(body.contains("data:image/png;base64,"))
                 assertTrue(body.contains("data:image/jpeg;base64,"))
                 assertTrue(body.contains("page.pdf"))
-                compose.waitUntil(15_000) { compose.onAllNodesWithText("Files received").fetchSemanticsNodes().isNotEmpty() }
-                compose.waitUntil(15_000) { compose.onAllNodesWithTag("chat_stop").fetchSemanticsNodes().isEmpty() }
+                // Turn completion waits are 45s, not 15s: on a loaded CI
+                // emulator the agent turn (staging + model round-trip +
+                // render) can take longer than 15s after the request is
+                // sent. The assertions are unchanged — "Files received"
+                // must appear and chat_stop must disappear — only the
+                // patience grows. (Flaked in CI runs 44823743134,
+                // 44830839022, 44832125169 at the 15s waits.)
+                compose.waitUntil(45_000) { compose.onAllNodesWithText("Files received").fetchSemanticsNodes().isNotEmpty() }
+                compose.waitUntil(45_000) { compose.onAllNodesWithTag("chat_stop").fetchSemanticsNodes().isEmpty() }
                 assertFalse(runBlocking { MemoryStore(context).recentMessages(20) }.any { it.content.contains("cedar token") && it.role == "user" })
                 compose.onNodeWithTag("chat_new").performClick()
                 compose.waitUntil(15_000) { compose.onAllNodesWithTag("keep_sample.txt").fetchSemanticsNodes().isNotEmpty() }
