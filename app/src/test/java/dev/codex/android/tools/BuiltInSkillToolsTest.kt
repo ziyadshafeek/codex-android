@@ -18,8 +18,8 @@ import org.junit.Test
  * - [OpenAppTool] runs for real against a fake package resolver:
  *   the resolver returning null proves the "no launchable app"
  *   path without launching anything; the resolver is the injected
- *   seam in BuiltinTools.kt. The tool is built without a constructor
- *   call (Unsafe.allocateInstance) because a real android.content
+ *   seam in BuiltinTools.kt. The tool is built with a null Context
+ *   (its constructor accepts one) because a real android.content
  *   .Context cannot exist in a JVM test — the tests never touch the
  *   Context (missing-arg and null-resolver paths return first).
  * - [ReadScreenTool] cannot reach a real screen in a JVM test: the
@@ -50,19 +50,8 @@ class BuiltInSkillToolsTest {
     // resolver is set by reflection; the Context field stays null and
     // is never touched on the paths tested here.
 
-    private fun openAppToolWithResolver(resolver: (String) -> Intent?): OpenAppTool {
-        val unsafe = sun.misc.Unsafe::class.java.getDeclaredField("theUnsafe")
-            .apply { isAccessible = true }.get(null) as sun.misc.Unsafe
-        val tool = unsafe.allocateInstance(OpenAppTool::class.java) as OpenAppTool
-        OpenAppTool::class.java.getDeclaredField("launchIntentForPackage")
-            .apply { isAccessible = true }.set(tool, resolver)
-        // allocateInstance skips the constructor, so the `name` val's
-        // backing field is still null; set it the same way so the
-        // registry lookup by name below proves the real registration.
-        OpenAppTool::class.java.getDeclaredField("name")
-            .apply { isAccessible = true }.set(tool, "open_app")
-        return tool
-    }
+    private fun openAppToolWithResolver(resolver: (String) -> Intent?): OpenAppTool =
+        OpenAppTool(context = null, launchIntentForPackage = resolver)
 
     @Test
     fun openApp_missingPackageName_clearError() = runBlocking {

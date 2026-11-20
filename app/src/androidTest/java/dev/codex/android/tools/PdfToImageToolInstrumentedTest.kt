@@ -99,10 +99,11 @@ class PdfToImageToolInstrumentedTest {
         assertTrue(result.error.orEmpty(), result.ok)
         assertTrue(result.output.contains("images/report-p1.png"))
         assertTrue(result.output.contains("images/report-p2.png"))
-        assertTrue(result.output.contains("1240x1754 px"))
-        // A4 (595.28 x 841.89 pt) at 150 dpi = 1240 x 1754 px.
-        assertValidPng(File(workspace, "images/report-p1.png"), 1240, 1754)
-        assertValidPng(File(workspace, "images/report-p2.png"), 1240, 1754)
+        assertTrue(result.output.contains("1240x1752 px"))
+        // A4 is 595.28 x 841.89 pt, but PdfRenderer.Page reports integer
+        // points (595 x 841), so at 150 dpi the render is 1240 x 1752 px.
+        assertValidPng(File(workspace, "images/report-p1.png"), 1240, 1752)
+        assertValidPng(File(workspace, "images/report-p2.png"), 1240, 1752)
     }
 
     @Test
@@ -113,8 +114,8 @@ class PdfToImageToolInstrumentedTest {
         assertTrue(result.error.orEmpty(), result.ok)
         assertTrue(result.output.contains("images/two-p2.png"))
         assertFalse(File(workspace, "images/two-p1.png").exists())
-        // A4 at 72 dpi = 595 x 842 px.
-        assertValidPng(File(workspace, "images/two-p2.png"), 595, 842)
+        // A4 at 72 dpi = 595 x 841 px (PdfRenderer reports integer points).
+        assertValidPng(File(workspace, "images/two-p2.png"), 595, 841)
     }
 
     @Test
@@ -125,8 +126,8 @@ class PdfToImageToolInstrumentedTest {
         assertTrue(result.error.orEmpty(), result.ok)
         assertTrue(result.output.contains("renders/range-p1.png"))
         assertTrue(result.output.contains("renders/range-p2.png"))
-        assertValidPng(File(workspace, "renders/range-p1.png"), 1240, 1754)
-        assertValidPng(File(workspace, "renders/range-p2.png"), 1240, 1754)
+        assertValidPng(File(workspace, "renders/range-p1.png"), 1240, 1752)
+        assertValidPng(File(workspace, "renders/range-p2.png"), 1240, 1752)
         assertFalse(File(workspace, "renders/range-p3.png").exists())
     }
 

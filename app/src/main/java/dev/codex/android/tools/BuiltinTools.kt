@@ -97,9 +97,13 @@ object EchoTool : Tool {
  * manifest declares the LAUNCHER <queries> intent.
  */
 class OpenAppTool(
-    private val context: Context,
+    // Nullable so JVM tests can build the tool without an Android
+    // Context: the missing-arg and null-resolver paths return before
+    // the context is ever touched. Production always passes a real
+    // Context (ToolRegistry.withBuiltins).
+    private val context: Context?,
     private val launchIntentForPackage: (String) -> Intent? = { pkg ->
-        context.packageManager.getLaunchIntentForPackage(pkg)
+        context?.packageManager?.getLaunchIntentForPackage(pkg)
     },
 ) : Tool {
     override val name: String = "open_app"
@@ -130,8 +134,14 @@ class OpenAppTool(
                     output = "",
                     error = "No launchable app for package $packageName",
                 )
+            val ctx = context
+                ?: return ToolResult(
+                    ok = false,
+                    output = "",
+                    error = "No Android context available to open $packageName",
+                )
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(intent)
+            ctx.startActivity(intent)
             ToolResult(ok = true, output = "Opened $packageName")
         } catch (e: Exception) {
             ToolResult(
