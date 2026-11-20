@@ -114,7 +114,10 @@ class ModelsCatalog internal constructor(
      *     [Dispatchers.IO] and returns `false`.
      */
     internal suspend fun loadOffline() = withContext(Dispatchers.IO) {
-        (readCachedModels() ?: snapshotLoader()?.let(::parseCatalog))?.let { snapshot = CatalogIndex.from(it) }
+        if (snapshot.all.isEmpty()) {
+            val loaded = readCachedModels() ?: runCatching { snapshotLoader()?.let(::parseCatalog) }.getOrNull()
+            if (!loaded.isNullOrEmpty() && snapshot.all.isEmpty()) snapshot = CatalogIndex.from(loaded)
+        }
     }
 
     suspend fun refresh(): Boolean = withContext(Dispatchers.IO) {

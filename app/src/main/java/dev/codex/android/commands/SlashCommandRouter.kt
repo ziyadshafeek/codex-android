@@ -80,7 +80,7 @@ object SlashCommandRouter {
         ),
         CommandMeta(
             name = "compact",
-            description = "Summarise this thread into a stored summary and mark older messages compacted",
+            description = "Summarise the full thread and tool activity without deleting the transcript",
             usage = "/compact",
         ),
         CommandMeta(

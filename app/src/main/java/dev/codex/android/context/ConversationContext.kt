@@ -121,6 +121,20 @@ internal class ConversationContext(private val db: CodexDatabase) {
         currentGoal: String? = null,
         previous: TimelineMessage? = null,
         onProgress: (Int) -> Unit = {},
+    ): TimelineMessage? = checkpoint(threadId, budget, automatic, currentGoal, previous, onProgress) { prompt ->
+        val reply = client.chat(listOf(ChatMessage("user", prompt)), emptyList(), model).choices.firstOrNull()
+        check(reply?.finishReason != "length") { "The provider returned an incomplete summary." }
+        reply?.text.orEmpty()
+    }
+
+    suspend fun checkpoint(
+        threadId: String,
+        budget: Int,
+        automatic: Boolean = false,
+        currentGoal: String? = null,
+        previous: TimelineMessage? = null,
+        onProgress: (Int) -> Unit = {},
+        summarize: suspend (String) -> String,
     ): TimelineMessage? {
         val start = if (automatic) summaryCutoff(previous) else 0L
         val latest = db.getMessages(threadId, HISTORY_PAGE, mostRecent = true, afterId = start)
@@ -143,9 +157,8 @@ internal class ConversationContext(private val db: CodexDatabase) {
                 appendLine("Next transcript section:")
                 append(chunk)
             }
-            val reply = client.chat(listOf(ChatMessage("user", prompt)), emptyList(), model).choices.firstOrNull()
-            val text = SecretScrubber.scrub(reply?.text.orEmpty()).trim()
-            check(text.isNotEmpty() && reply?.finishReason != "length" && text.length <= summaryChars * 2) {
+            val text = SecretScrubber.scrub(summarize(prompt)).trim()
+            check(text.isNotEmpty() && text.length <= summaryChars * 2) {
                 "The provider returned an incomplete summary. The transcript was not changed."
             }
             checkpoint = text
@@ -154,7 +167,7 @@ internal class ConversationContext(private val db: CodexDatabase) {
         var cursor = start
         while (cursor < end) {
             val page = db.getMessages(threadId, HISTORY_PAGE, afterId = cursor)
-            if (page.isEmpty()) break
+            check(page.isNotEmpty()) { "The transcript changed while summarising." }
             for (row in page) {
                 if (row.id > end || row.kind == "summary") continue
                 val display = renderRow(row)
@@ -181,8 +194,11 @@ internal class ConversationContext(private val db: CodexDatabase) {
 internal fun transcriptRecorder(db: CodexDatabase, threadId: String): suspend (String, String, String) -> Unit = { kind, name, content ->
     val recorded = if (name == "memory_search") "Saved notes consulted (private content not recorded)." else SecretScrubber.scrub(content)
     try {
-        db.appendMessage(TimelineMessage(threadId = threadId, role = if (kind == "intermediate") "assistant" else "tool",
-            kind = kind, content = if (kind == "intermediate") recorded else "${SecretScrubber.scrub(name)}: $recorded"))
+        for ((index, piece) in transcriptPieces(recorded.ifEmpty { "(empty)" }, 32_000).withIndex()) {
+            val label = SecretScrubber.scrub(name) + if (index == 0) "" else " (continued)"
+            db.appendMessage(TimelineMessage(threadId = threadId, role = if (kind == "intermediate") "assistant" else "tool",
+                kind = kind, content = "$label: $piece"))
+        }
     } catch (e: kotlinx.coroutines.CancellationException) {
         throw e
     } catch (_: Exception) {

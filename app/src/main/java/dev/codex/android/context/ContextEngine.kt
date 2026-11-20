@@ -45,8 +45,15 @@ class DatabaseThreadHistoryStore(
     override suspend fun createThread(workspaceId: String, title: String, mode: String): ThreadEntity =
         database.createThread(workspaceId, title, mode)
 
-    override suspend fun getMessages(threadId: String): List<TimelineMessage> =
-        database.getMessages(threadId)
+    override suspend fun getMessages(threadId: String): List<TimelineMessage> = buildList {
+        var cursor = 0L
+        while (true) {
+            val page = database.getMessages(threadId, limit = 128, afterId = cursor)
+            if (page.isEmpty()) break
+            addAll(page)
+            cursor = page.last().id
+        }
+    }
 
     override suspend fun appendMessage(message: TimelineMessage) {
         database.appendMessage(message)

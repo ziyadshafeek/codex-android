@@ -104,6 +104,19 @@ class AttachmentIntegrationTest {
                 compose.waitUntil(15_000) { compose.onAllNodesWithText("Files received").fetchSemanticsNodes().isNotEmpty() }
                 compose.waitUntil(15_000) { compose.onAllNodesWithTag("chat_stop").fetchSemanticsNodes().isEmpty() }
                 assertFalse(runBlocking { MemoryStore(context).recentMessages(20) }.any { it.content.contains("cedar token") && it.role == "user" })
+                compose.onNodeWithTag("chat_new").performClick()
+                compose.waitUntil(15_000) { compose.onAllNodesWithTag("keep_sample.txt").fetchSemanticsNodes().isNotEmpty() }
+                compose.onNodeWithTag("keep_sample.txt").performClick()
+                compose.onNodeWithTag("new_chat_save_selected").performClick()
+                compose.waitUntil(15_000) { compose.onAllNodesWithText("Start a new chat?").fetchSemanticsNodes().isEmpty() }
+                compose.onNodeWithTag("open_file_library").performClick()
+                compose.waitUntil(15_000) { compose.onAllNodesWithTag("library_file_sample.txt").fetchSemanticsNodes().isNotEmpty() }
+                compose.onNodeWithTag("library_file_sample.txt").performClick()
+                compose.onNodeWithText("Delete file").performClick()
+                compose.onNodeWithText("Delete", substring = false).performClick()
+                compose.waitUntil(15_000) { compose.onAllNodesWithText("Deleted sample.txt.").fetchSemanticsNodes().isNotEmpty() }
+                assertTrue(compose.onAllNodesWithTag("library_file_page.pdf").fetchSemanticsNodes().isEmpty())
+
             } finally {
                 Intents.release()
                 fixture.deleteRecursively()
