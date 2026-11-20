@@ -503,8 +503,16 @@ fun WorkbenchScreen(
                                 onRevertFile = { relPath ->
                                     scope.launch(Dispatchers.IO) {
                                         workspaceFiles?.revertFile(relPath)
-                                        val updated = workspaceFiles?.getChanges().orEmpty()
-                                        withContext(Dispatchers.Main) { fileChanges = updated }
+                                        withContext(Dispatchers.Main) {
+                                            // If the reverted file is open
+                                            // in the editor, reload it from
+                                            // disk: otherwise the editor
+                                            // keeps showing the pre-revert
+                                            // text and a later Save
+                                            // silently undoes the revert.
+                                            if (openFilePath == relPath) editorVersion++
+                                            refreshFiles()
+                                        }
                                     }
                                 },
                                 onUndo = if (snapshotEngine != null) {
@@ -738,7 +746,7 @@ fun MissionControlPanel(
             ) {
                 Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
-                        text = "Spend: $${"%.4f".format(costStats.costUsd)}",
+                        text = "Spend: $${"%.4f".format(java.util.Locale.US, costStats.costUsd)}",
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
                         color = OledGreen,

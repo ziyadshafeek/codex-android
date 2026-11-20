@@ -1,18 +1,27 @@
 package dev.codex.android.ui
 
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.codex.android.agent.AgentEvent
 import dev.codex.android.agent.AgentLoop
 import dev.codex.android.agent.AgentRuntime
 import dev.codex.android.agent.PendingApproval
+import dev.codex.android.agent.PlanRepository
 import dev.codex.android.agent.PlanStore
 import dev.codex.android.agent.requiresInAppReview
+import dev.codex.android.api.ProviderService
 import dev.codex.android.browser.VerificationBrowser
 import dev.codex.android.browser.browserTools
+import dev.codex.android.commands.CommandContext
+import dev.codex.android.commands.SlashAction
+import dev.codex.android.commands.SlashCommandRouter
+import dev.codex.android.commands.SlashResult
+import dev.codex.android.commands.SummariseResult
 import dev.codex.android.context.ConversationContext
 import dev.codex.android.context.buildConversationContext
+import dev.codex.android.context.contextTokens
 import dev.codex.android.context.historyBudget
 import dev.codex.android.api.OkHttpOpenAiClient
 import dev.codex.android.ci.GitHubActionsEngine
@@ -36,6 +45,9 @@ import dev.codex.android.security.ToolRisk
 import dev.codex.android.skills.SkillStore
 import dev.codex.android.tools.Attachment
 import dev.codex.android.tools.AttachmentIngest
+import dev.codex.android.tools.TodoReadTool
+import dev.codex.android.tools.TodoStore
+import dev.codex.android.tools.TodoWriteTool
 import dev.codex.android.tools.Tool
 import dev.codex.android.tools.ToolRegistry
 import dev.codex.android.tools.ToolResult
@@ -173,6 +185,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _activeThreadId = MutableStateFlow<String?>(null)
     val activeThreadId: StateFlow<String?> = _activeThreadId.asStateFlow()
+
+    /**
+     * Estimated context usage for the current thread: (used tokens,
+     * context window tokens), using the same conservative estimator the
+     * history budget uses. Feeds the workbench CTX meter — its
+     * updateContextUsage used to have no caller, so the meter sat at
+     * 0% forever. Updated after each run's context is built, and when
+     * a thread is opened (estimated from its loaded messages).
+     */
+    private val _contextUsage = MutableStateFlow(0L to keyStore.contextTokens())
+    val contextUsage: StateFlow<Pair<Long, Int>> = _contextUsage.asStateFlow()
 
     /**
      * Live rate-limit countdown (seconds remaining), shown above the
@@ -432,12 +455,202 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Runs one slash command (/help, /plan, /delete, /fork, ...) through
+     * [SlashCommandRouter] and applies its [SlashAction]. Slash commands
+     * never start an agent turn and are never recorded as History goals.
+     *
+     * Thread rules: /help and /model work with no thread open; every
+     * other command needs the current thread (its handlers act on it).
+     * The [startingTurn] guard is held while handling so a rapid second
+     * tap cannot run the same command twice — and so [openThread] (for a
+     * /fork switch) and a /plan follow-up run only after it resets.
+     * A /plan follow-up prompt is sent as a normal goal in PLAN mode
+     * once handling finishes.
+     */
+    private fun handleSlashCommand(input: String) {
+        if (startingTurn || _compacting.value || _isRunning.value) return
+        val parsed = SlashCommandRouter.parseCommand(input)
+        val threadId = currentThreadId
+        if (threadId == null && parsed?.name != null &&
+            parsed.name != "help" && parsed.name != "model"
+        ) {
+            append(ChatUiMessage("user", input))
+            append(
+                ChatUiMessage(
+                    "system",
+                    "Send a message first, then use slash commands — most commands act on the current thread.",
+                ),
+            )
+            return
+        }
+        startingTurn = true
+        viewModelScope.launch {
+            var switchTo: String? = null
+            var followUp: Pair<String, ExecutionMode>? = null
+            try {
+                val db = CodexDatabase.getInstance(getApplication())
+                val ctx = CommandContext(
+                    threadId = threadId.orEmpty(),
+                    workspaceId = CodexDatabase.DEFAULT_PHONE_WORKSPACE_ID,
+                    db = db,
+                    keyStore = keyStore,
+                    providerService = ProviderService(),
+                    skillStore = skillStore,
+                    policy = AgentRuntime.policy,
+                    workspaceFiles = workspaceFileTools,
+                    summarise = { prompt -> summariseOneShot(prompt) },
+                )
+                val result = try {
+                    SlashCommandRouter.handle(input, ctx)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    SlashResult("Could not run that command: ${e.message ?: e.javaClass.simpleName}")
+                }
+                when (val action = result.action) {
+                    is SlashAction.None -> {
+                        append(ChatUiMessage("user", input))
+                        append(ChatUiMessage("system", result.text))
+                        saveSlashTranscript(input, result.text)
+                    }
+                    is SlashAction.ClearThread -> {
+                        if (action.threadId == threadId) _messages.value = emptyList()
+                        append(ChatUiMessage("system", result.text))
+                        saveSlashTranscript(input, result.text)
+                    }
+                    is SlashAction.DeleteCurrentThread -> {
+                        if (action.threadId == threadId) {
+                            currentThreadId = null
+                            openedThreadId = null
+                            _activeThreadId.value = null
+                            _messages.value = emptyList()
+                        }
+                        append(ChatUiMessage("system", result.text))
+                        saveSlashTranscript(input, result.text)
+                    }
+                    is SlashAction.SwitchThread -> {
+                        // The fork note lives in the NEW thread's timeline
+                        // so it survives openThread's wholesale replace;
+                        // the command itself is not shown in the old thread.
+                        try {
+                            db.appendMessage(
+                                TimelineMessage(
+                                    threadId = action.threadId,
+                                    role = "system",
+                                    kind = "text",
+                                    content = result.text,
+                                ),
+                            )
+                        } catch (_: Exception) {
+                            // The thread still opens; the note is best-effort.
+                        }
+                        switchTo = action.threadId
+                    }
+                    is SlashAction.Export -> {
+                        append(ChatUiMessage("user", input))
+                        append(ChatUiMessage("system", result.text))
+                        saveSlashTranscript(input, result.text)
+                        val saved = try {
+                            withContext(Dispatchers.IO) {
+                                workspaceFileTools.writeFile(action.filename, action.markdown)
+                            }
+                            true
+                        } catch (_: Exception) {
+                            false
+                        }
+                        if (!saved) {
+                            append(
+                                ChatUiMessage(
+                                    "system",
+                                    "Could not save ${action.filename} in the workspace.",
+                                    isError = true,
+                                ),
+                            )
+                        }
+                    }
+                }
+                result.followUpPrompt?.takeIf { it.isNotBlank() }?.let { prompt ->
+                    followUp = prompt to ExecutionMode.PLAN
+                }
+            } finally {
+                startingTurn = false
+            }
+            switchTo?.let { openThread(it) }
+            followUp?.let { (prompt, mode) -> sendGoal(prompt, mode) }
+        }
+    }
+
+    /** Fire-and-forget transcript save for a slash command + its result. */
+    private fun saveSlashTranscript(input: String, resultText: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                memoryStore.saveMessage("user", input)
+                memoryStore.saveMessage("system", resultText)
+            } catch (_: Exception) {
+                // Never crash on a memory failure.
+            }
+        }
+    }
+
+    /**
+     * One-shot read-only summariser for /recap (and /compact, when the
+     * router handles it): a bare [AgentLoop] with an EMPTY tool registry,
+     * so the model can only reply with text. A no-op plan repository is
+     * used so the summary run never overwrites the user's saved plan,
+     * and a deny-all gate (never consulted — no tools exist to gate).
+     * Never fabricates a summary: no key means [SummariseResult.NotConfigured].
+     */
+    private suspend fun summariseOneShot(prompt: String): SummariseResult {
+        val base = keyStore.getBaseUrl()
+        val key = keyStore.getApiKey()
+        if (base.isBlank() || key.isNullOrBlank()) return SummariseResult.NotConfigured
+        return try {
+            val model = keyStore.getModel()
+            val client = OkHttpOpenAiClient(baseUrl = base, apiKey = key, model = model)
+            val loop = AgentLoop(
+                client = client,
+                tools = ToolRegistry(),
+                gate = DenyAllApprovalGate,
+                planStore = NoOpPlanRepository,
+                model = model,
+            )
+            val answer = loop.run(prompt) {
+                // Events (plan, tool calls, ...) are ignored: the
+                // summariser has no tools and only the final text matters.
+            }
+            val text = answer.trim()
+            when {
+                text.isBlank() -> SummariseResult.Failed("The model returned an empty summary.")
+                text.startsWith("I could not finish:") -> SummariseResult.Failed(
+                    text.removePrefix("I could not finish:").trim()
+                        .ifBlank { "The model could not finish." },
+                )
+                else -> SummariseResult.Ok(text)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            SummariseResult.Failed(e.message ?: "Summarisation failed")
+        }
+    }
+
     fun sendGoal(goal: String, mode: ExecutionMode = ExecutionMode.AUTO) {
         parseMemoryCommand(goal)?.let { command ->
             if (!startingTurn && !_compacting.value && !_isRunning.value) handleMemoryCommand(command)
             return
         }
         if (goal.trim().equals("/compact", ignoreCase = true)) { compactChat(); return }
+        // Slash commands (/help, /plan, /delete, ...) are handled locally
+        // by SlashCommandRouter instead of starting an agent turn: they
+        // act on the current thread through real engines (DB, skills,
+        // provider), and the router was previously never called from
+        // anywhere, so every slash command silently went to the model as
+        // a normal goal. /compact keeps its own path above.
+        if (SlashCommandRouter.isSlashCommand(goal)) {
+            handleSlashCommand(goal)
+            return
+        }
         if (goal.isBlank() || _compacting.value) return
         if (startingTurn) return
         startingTurn = true
@@ -512,9 +725,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      * goal still goes out with a note saying so — the message is never
      * silently dropped.
      */
-    fun sendGoalWithAttachments(text: String, attachments: List<Attachment>) {
+    fun sendGoalWithAttachments(
+        text: String,
+        attachments: List<Attachment>,
+        mode: ExecutionMode = ExecutionMode.AUTO,
+    ) {
         if (attachments.isEmpty()) {
-            sendGoal(text)
+            sendGoal(text, mode)
             return
         }
         val context = getApplication<Application>()
@@ -540,8 +757,49 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     append("[Attachments could not be read.]")
                 }
             }
-            sendGoal(goal)
+            sendGoal(goal, mode)
         }
+    }
+
+    /**
+     * Workbench @file attachments: the composer attaches workspace-relative
+     * paths, which used to be dropped on the floor (MainActivity ignored
+     * the third onSendPrompt parameter). Each path is resolved safely
+     * inside the workspace and ingested exactly like a chat attachment
+     * (text extracted inline, images saved for read_image), so the agent
+     * actually sees the files. Paths that escape the workspace or do not
+     * exist are reported in the goal text instead of crashing or
+     * silently vanishing.
+     */
+    fun sendGoalWithWorkspaceFiles(
+        text: String,
+        relativePaths: List<String>,
+        mode: ExecutionMode = ExecutionMode.AUTO,
+    ) {
+        if (relativePaths.isEmpty()) {
+            sendGoal(text, mode)
+            return
+        }
+        val attachments = relativePaths.mapNotNull { rel ->
+            runCatching {
+                val file = workspaceFileTools.resolveSafe(rel)
+                if (!file.isFile) return@mapNotNull null
+                Attachment(
+                    uri = Uri.fromFile(file),
+                    name = file.name,
+                    mimeType = null,
+                    sizeBytes = file.length(),
+                )
+            }.getOrNull()
+        }
+        if (attachments.isEmpty()) {
+            sendGoal(
+                "$text\n\n[Attached files could not be read: ${relativePaths.joinToString(", ")}]",
+                mode,
+            )
+            return
+        }
+        sendGoalWithAttachments(text, attachments, mode)
     }
 
     /**
@@ -592,6 +850,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun openThread(threadId: String) {
         if (_compacting.value || startingTurn || _isRunning.value) return
         chatGeneration++
+        // Generation guard: a second openThread increments the generation,
+        // so a slow load from an older call must not overwrite the newer
+        // thread's ids and messages when it finally lands.
+        val generationAtStart = chatGeneration
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val db = CodexDatabase.getInstance(getApplication())
@@ -604,12 +866,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     ChatUiMessage(role, stored.content, contextSummary = stored.kind == "summary")
                 }
+                if (generationAtStart != chatGeneration) return@launch
                 threadMutex.withLock {
                     openedThreadId = threadId
                     currentThreadId = threadId
                     _activeThreadId.value = threadId
                 }
                 _messages.value = opened
+                // Estimate the opened thread's context usage from its
+                // loaded messages so the workbench CTX meter is live
+                // before the next run builds its context.
+                _contextUsage.value =
+                    opened.sumOf { contextTokens(it.text) }.toLong() to keyStore.contextTokens()
             } catch (e: Exception) {
                 // Never crash on a corrupt DB.
             }
@@ -690,6 +958,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
         val history = db.getMessages(threadId, limit = 128, mostRecent = true, kind = "text", conversationOnly = true)
         val conversation = buildConversationContext(history, summary, goal, budget)
+        // Feed the workbench CTX meter with the same estimate the
+        // history budget uses (conversation text + the goal itself).
+        _contextUsage.value =
+            conversation.sumOf { contextTokens(it.content) }.toLong() to keyStore.contextTokens()
         val loop = AgentLoop(
             client = client,
             tools = policyGatedRegistry(threadId, mode, db),
@@ -854,6 +1126,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             github = GitHubActionsEngine(tokenProvider = { token }),
             repository = { repo },
         )
+        // Todo tools are per-thread: re-register them bound to THIS thread
+        // so todos written in one thread never leak into another. The base
+        // registry registers them with the shared "default" list, and
+        // registering again replaces them by name.
+        interactive.register(TodoWriteTool(context = application, threadIdProvider = { threadId }))
+        interactive.register(TodoReadTool(context = application, threadIdProvider = { threadId }))
         previewBrowser?.let { browser ->
             browserTools(browser).filterNot { it.name in setOf("browser_eval", "browser_screenshot") }
                 .forEach(interactive::register)
@@ -871,11 +1149,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
  * classification: tools that declare themselves sensitive are the
  * mutating/external ones; everything else is read-only.
  *
- * NOTE: only TypeTextTool declares sensitive=true among the built-ins, so
- * in PLAN mode only it is blocked; ScheduleTask/GenerateApp declare
- * themselves non-sensitive (see their KDoc) and therefore run as
- * read-only. If a tool's sensitivity flag is ever widened, the policy
- * follows it with no change here.
+ * NOTE: TypeTextTool and the clipboard tools (clipboard_get/set) declare
+ * sensitive=true among the built-ins, so in PLAN mode they are blocked;
+ * ScheduleTask/GenerateApp declare themselves non-sensitive (see their
+ * KDoc) and therefore run as read-only. If a tool's sensitivity flag is
+ * ever widened, the policy follows it with no change here.
  */
 private fun riskFor(tool: Tool): ToolRisk =
     if (tool.sensitive) ToolRisk.EXTERNAL_OR_DESTRUCTIVE else ToolRisk.READ_ONLY
@@ -1018,4 +1296,26 @@ private class PolicyGatedTool(
         )
         return result
     }
+}
+
+/**
+ * Approval gate that never approves anything: used only by the one-shot
+ * summariser ([ChatViewModel] /recap), which registers an EMPTY tool
+ * registry, so it is never consulted. A gate must still be supplied
+ * because [AgentLoop] requires one.
+ */
+private object DenyAllApprovalGate : ApprovalGate {
+    override val pending: StateFlow<PendingAction?> = MutableStateFlow(null)
+    override suspend fun requestApproval(action: PendingAction): Boolean = false
+    override fun answer(id: String, approved: Boolean) = Unit
+}
+
+/**
+ * Plan repository that persists nothing: used only by the one-shot
+ * summariser, so a summary run never overwrites the user's saved plan.
+ */
+private object NoOpPlanRepository : PlanRepository {
+    override suspend fun loadLatest(): dev.codex.android.agent.Plan? = null
+    override suspend fun save(plan: dev.codex.android.agent.Plan) = Unit
+    override suspend fun clear() = Unit
 }

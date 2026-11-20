@@ -16,15 +16,6 @@ data class Attachment(
     val sizeBytes: Long?,
 )
 
-/** Maximum size of a single attached file (10 MB). */
-const val MAX_ATTACHMENT_BYTES: Long = 10L * 1024L * 1024L
-
-/** Maximum number of attached files in one message. */
-const val MAX_ATTACHMENTS_PER_MESSAGE: Int = 3
-
-/** Default cap on extracted text included in a chat goal. */
-const val MAX_EXTRACTED_CHARS: Int = 20_000
-
 /**
  * Shared attachment handling for the chat composer ([dev.codex.android.ui.ChatScreen] /
  * `ChatViewModel.sendGoalWithAttachments`) and Share-to-Codex
@@ -40,10 +31,26 @@ const val MAX_EXTRACTED_CHARS: Int = 20_000
  */
 object AttachmentIngest {
 
+    /** Maximum size of a single attached file (10 MB). */
+    const val MAX_ATTACHMENT_BYTES: Long = 10L * 1024L * 1024L
+
+    /** Maximum number of attached files in one message. */
+    const val MAX_ATTACHMENTS_PER_MESSAGE: Int = 3
+
+    /** Default cap on extracted text included in a chat goal. */
+    const val MAX_EXTRACTED_CHARS: Int = 20_000
+
+    // Only formats BitmapFactory can actually decode: SVG and TIFF are
+    // NOT in this set on purpose — BitmapFactory.decodeFile cannot
+    // decode them, so classifying them as images made ingest emit a
+    // read_image marker for a file read_image always fails on. SVG/TIFF
+    // attachments now fall through to the name/type/size description.
     private val IMAGE_EXTENSIONS = setOf(
         ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".heic", ".heif",
-        ".svg", ".tif", ".tiff",
     )
+
+    /** Image MIME types BitmapFactory cannot decode (same reason). */
+    private val UNSUPPORTED_IMAGE_MIMES = setOf("image/svg+xml", "image/tiff")
     private val DOCUMENT_EXTENSIONS = setOf(
         ".docx", ".xlsx", ".pptx", ".doc", ".xls", ".ppt",
     )
@@ -79,9 +86,12 @@ object AttachmentIngest {
     private fun cleanMime(mime: String?): String? =
         mime?.substringBefore(';')?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
 
-    fun isImage(mime: String?, name: String): Boolean =
-        cleanMime(mime)?.startsWith("image/") == true ||
+    fun isImage(mime: String?, name: String): Boolean {
+        val clean = cleanMime(mime)
+        if (clean != null && clean in UNSUPPORTED_IMAGE_MIMES) return false
+        return clean?.startsWith("image/") == true ||
             extensionOf(name) in IMAGE_EXTENSIONS
+    }
 
     fun isPdf(mime: String?, name: String): Boolean =
         cleanMime(mime) == "application/pdf" || extensionOf(name) == ".pdf"
@@ -115,7 +125,9 @@ object AttachmentIngest {
     private fun formatSize(bytes: Long): String = when {
         bytes < 1024 -> "$bytes B"
         bytes < 1024 * 1024 -> "${bytes / 1024} KB"
-        else -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
+        // Locale.US: the default locale would render "1,5 MB" in many
+        // locales, and the size is shown to the model as plain text.
+        else -> "%.1f MB".format(java.util.Locale.US, bytes / (1024.0 * 1024.0))
     }
 
     /** Known size of [uri] via OpenableColumns, or null when unavailable. */

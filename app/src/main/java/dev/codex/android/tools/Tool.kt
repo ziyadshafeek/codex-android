@@ -88,19 +88,28 @@ class ToolRegistry {
                 register(ScheduleTaskTool(context))
                 register(GenerateAppTool(context))
                 register(ListStoreTool(context))
-                // Filler (other AI): question / todo / web tools. The web
-                // search endpoint + key are blank until a BYOK search
-                // setting exists in KeyStore — the tool then reports
-                // itself unconfigured rather than calling anything.
+                // Filler (other AI): question / todo tools. Web search IS
+                // registered: it works with no configuration (keyless
+                // DuckDuckGo HTML fallback), and the BYOK endpoint + key
+                // override applies when both are supplied — no search
+                // setting exists in KeyStore or Settings yet, so the
+                // tool is registered with blank endpoint/key and runs
+                // on DuckDuckGo until one is wired in.
+                register(WebSearchTool(endpoint = "", apiKey = ""))
                 register(QuestionTool)
                 register(TodoWriteTool(context))
                 register(TodoReadTool(context))
                 register(WebFetchTool())
-                register(WebSearchTool(endpoint = "", apiKey = ""))
                 register(ReadPdfTool)
                 register(ReadDocumentTool)
                 register(ReadTextFileTool)
                 register(ReadImageTool(context))
+                // Computer-use tools (swipe, tap_node, send_intent,
+                // clipboard_get/set): wired here so every registry built
+                // from withBuiltins (chat, automations, subagents, daemon)
+                // offers them. They used to be defined but never
+                // registered anywhere, so the model could never call them.
+                registerComputerUseTools(this, context)
             }
     }
 }

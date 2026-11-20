@@ -23,6 +23,9 @@ import org.w3c.dom.Element
 import org.w3c.dom.Node
 
 private const val MAX_TEXT_FILE_CHARS = 100_000
+
+/** Bounded read for read_text_file: never load more than this from disk. */
+private const val MAX_TEXT_FILE_BYTES = 2 * 1024 * 1024
 private const val MAX_DOCUMENT_CHARS = 500_000
 private const val MAX_ZIP_ENTRY_BYTES = 10_000_000
 
@@ -543,12 +546,40 @@ object ReadTextFileTool : Tool {
         val file = File(path)
         if (!file.isFile) return fail("File not found: $path")
         return try {
-            val bytes = file.readBytes()
-            val head = bytes.take(8000).toByteArray()
-            if (head.contains(0.toByte())) {
-                return fail("This file does not look like a text file.")
+            // Bounded read: the old file.readBytes() loaded the whole
+            // file into memory, so a huge log file could OOM the app.
+            // 2 MB of bytes always decodes to far more than the 100k
+            // output chars, so nothing the caller can see is lost.
+            val raw = file.inputStream().use { stream ->
+                val buffer = ByteArray(MAX_TEXT_FILE_BYTES + 1)
+                var read = 0
+                while (read < buffer.size) {
+                    val n = stream.read(buffer, read, buffer.size - read)
+                    if (n < 0) break
+                    read += n
+                }
+                buffer.copyOf(read)
             }
-            val text = String(bytes, Charsets.UTF_8)
+            val bytes = raw.copyOf(minOf(raw.size, MAX_TEXT_FILE_BYTES))
+            // UTF-16 files start with a BOM and are full of NUL bytes,
+            // so the binary check below must not run on them — and they
+            // must be decoded as UTF-16, not UTF-8 (which would garble
+            // every other character).
+            val isUtf16Le = bytes.size >= 2 &&
+                bytes[0] == 0xFF.toByte() && bytes[1] == 0xFE.toByte()
+            val isUtf16Be = bytes.size >= 2 &&
+                bytes[0] == 0xFE.toByte() && bytes[1] == 0xFF.toByte()
+            if (!isUtf16Le && !isUtf16Be) {
+                val head = bytes.take(8000).toByteArray()
+                if (head.contains(0.toByte())) {
+                    return fail("This file does not look like a text file.")
+                }
+            }
+            val text = when {
+                isUtf16Le -> String(bytes.copyOfRange(2, bytes.size), Charsets.UTF_16LE)
+                isUtf16Be -> String(bytes.copyOfRange(2, bytes.size), Charsets.UTF_16BE)
+                else -> String(bytes, Charsets.UTF_8)
+            }
             ToolResult(ok = true, output = truncateWithNote(text, MAX_TEXT_FILE_CHARS))
         } catch (e: Exception) {
             fail("Could not read text file: ${e.message ?: e.javaClass.simpleName}")

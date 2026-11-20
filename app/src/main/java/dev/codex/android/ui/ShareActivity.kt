@@ -329,7 +329,8 @@ class ShareActivity : ComponentActivity() {
     private fun formatSize(bytes: Long): String = when {
         bytes < 1024 -> "$bytes B"
         bytes < 1024 * 1024 -> "${bytes / 1024} KB"
-        else -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
+        // Locale.US: the default locale would render "1,5 MB" in many locales.
+        else -> "%.1f MB".format(java.util.Locale.US, bytes / (1024.0 * 1024.0))
     }
 
     private fun deriveTitle(intent: Intent): String {

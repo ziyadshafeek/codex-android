@@ -403,14 +403,26 @@ class GitHubActionsEngine(
         val existing = execute(authedBuilder(refUrl(branch)).get().build()).use { response ->
             if (response.code == 404) null else {
                 checkResponse(response, "Get branch")
-                CodexJson.parseToJsonElement(response.body!!.string()).jsonObject["object"]!!.jsonObject.stringField("sha")
+                // No `!!`: an unexpected GitHub response must surface as
+                // a CodexError (shown to the user), never as an NPE crash.
+                val bodyText = response.body?.string()
+                    ?: throw CodexError.Unknown("Get branch: empty response")
+                val refObject = CodexJson.parseToJsonElement(bodyText).jsonObject["object"]?.jsonObject
+                    ?: throw CodexError.Unknown("Get branch: response missing object")
+                refObject.stringField("sha")
             }
         }
-        val parent = existing ?: getJson(refUrl(defaultBranch), "Get default branch")["object"]!!
-            .jsonObject.stringField("sha")
-        val parentTree = getJson("$base/git/commits/$parent", "Read base commit")["tree"]!!
-            .jsonObject.stringField("sha")
-        val tree = postJson("$base/git/trees", buildJsonObject {
+        val parent = existing ?: run {
+            val refObject = getJson(refUrl(defaultBranch), "Get default branch")["object"]?.jsonObject
+                ?: throw CodexError.Unknown("Get default branch: response missing object")
+            refObject.stringField("sha")
+        }
+        val parentTree = run {
+            val treeObject = getJson("$base/git/commits/$parent", "Read base commit")["tree"]?.jsonObject
+                ?: throw CodexError.Unknown("Read base commit: response missing tree")
+            treeObject.stringField("sha")
+        }
+        val tree = (postJson("$base/git/trees", buildJsonObject {
             put("base_tree", parentTree)
             put("tree", kotlinx.serialization.json.JsonArray(files.map { (path, content) ->
                 buildJsonObject {
@@ -420,12 +432,14 @@ class GitHubActionsEngine(
                     put("content", content)
                 }
             }))
-        }, "Create source tree")!!.stringField("sha")
-        val commit = postJson("$base/git/commits", buildJsonObject {
+        }, "Create source tree") ?: throw CodexError.Unknown("Create source tree: empty response"))
+            .stringField("sha")
+        val commit = (postJson("$base/git/commits", buildJsonObject {
             put("message", message)
             put("tree", tree)
             put("parents", kotlinx.serialization.json.JsonArray(listOf(JsonPrimitive(parent))))
-        }, "Commit workspace files")!!.stringField("sha")
+        }, "Commit workspace files") ?: throw CodexError.Unknown("Commit workspace files: empty response"))
+            .stringField("sha")
         if (existing == null) {
             postJson("$base/git/refs", buildJsonObject {
                 put("ref", "refs/heads/$branch")

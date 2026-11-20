@@ -42,13 +42,15 @@ class ScheduledTaskStore(context: Context) {
         }
     }
 
-    /** Inserts or replaces [task] (matched by id). Never throws. */
-    suspend fun save(task: ScheduledTask) = mutex.withLock { withContext(Dispatchers.IO) {
+    /** Inserts or replaces [task] (matched by id). Never throws; returns false when the save failed. */
+    suspend fun save(task: ScheduledTask): Boolean = mutex.withLock { withContext(Dispatchers.IO) {
         try {
             val next = all().filter { it.id != task.id } + task
             file.writeText(CodexJson.encodeToString(listSerializer, next))
+            true
         } catch (e: Exception) {
             // Swallowed by design — persistence must never break a run.
+            false
         }
     } }
 

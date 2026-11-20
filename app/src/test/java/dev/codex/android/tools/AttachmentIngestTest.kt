@@ -39,6 +39,21 @@ class AttachmentIngestTest {
     }
 
     @Test
+    fun isImage_rejectsSvgAndTiffBitmapFactoryCannotDecode() {
+        // BitmapFactory.decodeFile cannot decode SVG or TIFF, so
+        // classifying them as images made ingest emit a read_image
+        // marker for a file read_image always fails on.
+        assertFalse(AttachmentIngest.isImage("image/svg+xml", "diagram.svg"))
+        assertFalse(AttachmentIngest.isImage("image/tiff", "scan.tif"))
+        assertFalse(AttachmentIngest.isImage(null, "diagram.svg"))
+        assertFalse(AttachmentIngest.isImage(null, "scan.tiff"))
+        assertFalse(AttachmentIngest.isImage(null, "scan.tif"))
+        // Decodable formats still match.
+        assertTrue(AttachmentIngest.isImage(null, "photo.bmp"))
+        assertTrue(AttachmentIngest.isImage("image/heic", "pic"))
+    }
+
+    @Test
     fun isPdf_matchesPdfMimeAndExtension() {
         assertTrue(AttachmentIngest.isPdf("application/pdf", "report"))
         assertTrue(AttachmentIngest.isPdf(null, "report.PDF"))

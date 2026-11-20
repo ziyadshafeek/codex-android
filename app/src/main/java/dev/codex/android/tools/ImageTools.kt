@@ -246,7 +246,22 @@ class ReadImageTool(private val context: Context? = null) : Tool {
     private fun visionErrorMessage(error: Throwable): String {
         val detail = error.message.orEmpty()
         val lower = detail.lowercase()
-        return if (lower.contains("image") || lower.contains("vision")) {
+        // Rewrite ONLY when the failure actually says the model cannot
+        // take images. The old check matched any message containing
+        // "image"/"vision" — including a network/auth failure whose
+        // message merely mentioned an image URL — and blamed the model.
+        val unsupported = listOf(
+            "does not support image",
+            "doesn't support image",
+            "does not support vision",
+            "doesn't support vision",
+            "unsupported image",
+            "image input is not supported",
+            "images are not supported",
+            "vision is not supported",
+            "no vision",
+        ).any { lower.contains(it) }
+        return if (unsupported) {
             "This model does not support image input"
         } else {
             detail.ifBlank { "Image description failed" }

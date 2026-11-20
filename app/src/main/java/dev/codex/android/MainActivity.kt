@@ -294,6 +294,14 @@ class MainActivity : ComponentActivity() {
                     }
                     val chatMessages by viewModel.messages.collectAsState()
                     val activeThreadId by viewModel.activeThreadId.collectAsState()
+                    // Context meter: the workbench shows a live CTX %
+                    // fed by the ViewModel's per-run estimate.
+                    // updateContextUsage used to have no caller, so the
+                    // meter was stuck at 0%.
+                    val contextUsage by viewModel.contextUsage.collectAsState()
+                    LaunchedEffect(contextUsage) {
+                        workbenchStateHolder.updateContextUsage(contextUsage.first, contextUsage.second)
+                    }
                     val workbenchMessages = chatMessages.mapIndexed { index, msg ->
                         TimelineMessage(
                             id = index.toLong(),
@@ -389,7 +397,7 @@ class MainActivity : ComponentActivity() {
                                     terminalStateHolder = terminalStateHolder,
                                     snapshotEngine = snapshotEngine,
                                     onSelectThread = { threadId -> viewModel.openThread(threadId) },
-                                    onSendPrompt = { prompt, mode, _ -> viewModel.sendGoal(prompt, mode.toExecutionMode()) },
+                                    onSendPrompt = { prompt, mode, attached -> viewModel.sendGoalWithWorkspaceFiles(prompt, attached, mode.toExecutionMode()) },
                                     onOpenSettings = { showSettings = true },
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -413,7 +421,7 @@ class MainActivity : ComponentActivity() {
                                     terminalStateHolder = terminalStateHolder,
                                     snapshotEngine = snapshotEngine,
                                     onSelectThread = { threadId -> viewModel.openThread(threadId) },
-                                    onSendPrompt = { prompt, mode, _ -> viewModel.sendGoal(prompt, mode.toExecutionMode()) },
+                                    onSendPrompt = { prompt, mode, attached -> viewModel.sendGoalWithWorkspaceFiles(prompt, attached, mode.toExecutionMode()) },
                                     onOpenSettings = { showSettings = true },
                                 )
                             } else {

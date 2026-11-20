@@ -21,6 +21,8 @@ import dev.codex.android.security.PendingAction
 import dev.codex.android.security.PolicyDecision
 import dev.codex.android.security.ToolRisk
 import dev.codex.android.skills.SkillStore
+import dev.codex.android.tools.TodoReadTool
+import dev.codex.android.tools.TodoWriteTool
 import dev.codex.android.tools.Tool
 import dev.codex.android.tools.ToolRegistry
 import dev.codex.android.tools.ToolResult
@@ -192,10 +194,20 @@ class AutomationWorker(
         if (!keyStore.hasKey() || baseUrl.isBlank() || apiKey.isNullOrBlank()) {
             // No key to run with: record the miss as an error thread so
             // it is visible in History instead of vanishing silently.
+            // The error message is the Review Inbox summary — without it
+            // the row has no explanation for why nothing ran.
             val thread = db.createThread(
                 workspaceId = CodexDatabase.DEFAULT_PHONE_WORKSPACE_ID,
                 title = "Scheduled: $title",
                 mode = ExecutionMode.AUTO.name,
+            )
+            db.appendMessage(
+                TimelineMessage(
+                    threadId = thread.id,
+                    role = "assistant",
+                    kind = "error",
+                    content = "Scheduled task \"$title\" did not run: no model API key is configured. Add your endpoint and key in Settings, then re-run the task.",
+                ),
             )
             db.updateThreadState(thread.id, status = "error", unread = true)
             return Result.success()
@@ -433,9 +445,30 @@ class AutomationWorker(
         db: CodexDatabase,
     ): ToolRegistry {
         val gated = ToolRegistry()
-        ToolRegistry.withBuiltins(context).all().forEach { tool ->
-            gated.register(PolicyGatedTool(tool, threadId, db))
-        }
+        ToolRegistry.withBuiltins(context).all()
+            // The question tool queues for an answer no unattended run
+            // can ever receive, and generate_app is interactive-only:
+            // exclude both here, as interactive chat does.
+            .filterNot { it.name in setOf("question", "generate_app") }
+            .forEach { tool ->
+                gated.register(PolicyGatedTool(tool, threadId, db))
+            }
+        // Todo tools are per-thread: re-register them bound to THIS thread
+        // (the base registry uses the shared "default" list).
+        gated.register(
+            PolicyGatedTool(
+                TodoWriteTool(context = context, threadIdProvider = { threadId }),
+                threadId,
+                db,
+            ),
+        )
+        gated.register(
+            PolicyGatedTool(
+                TodoReadTool(context = context, threadIdProvider = { threadId }),
+                threadId,
+                db,
+            ),
+        )
         return gated
     }
 }

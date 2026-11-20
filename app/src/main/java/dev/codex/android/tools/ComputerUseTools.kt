@@ -31,14 +31,14 @@ import kotlinx.serialization.json.putJsonObject
  *   NOT reused — this app stays unrooted, gestures go through the
  *   AccessibilityService only.
  *
- * Registration: ToolRegistry.kt is owned by another workstream, so
- * these tools are NOT added to `ToolRegistry.withBuiltins` here.
- * Whoever wires the registry calls [registerComputerUseTools] once
- * with the app context. Names are new (`swipe`, `tap_node`,
- * `send_intent`, `clipboard_get`, `clipboard_set`) — the existing
- * `tap` / `type_text` / `read_screen` / `scroll` / `go_back` /
- * `press_home` tools in ControlTools.kt keep their names and schemas,
- * extended only with an optional `node_id` where it fits.
+ * Registration: these tools ARE registered by
+ * [ToolRegistry.withBuiltins] (the single registry builder used by chat,
+ * automations, subagents and the daemon), so the model can call them.
+ * Names are new (`swipe`, `tap_node`, `send_intent`, `clipboard_get`,
+ * `clipboard_set`) — the existing `tap` / `type_text` / `read_screen` /
+ * `scroll` / `go_back` / `press_home` tools in ControlTools.kt keep
+ * their names and schemas, extended only with an optional `node_id`
+ * where it fits.
  */
 
 private const val COMPUTER_USE_NOT_ENABLED_ERROR =
@@ -202,7 +202,9 @@ class SendIntentTool(private val context: Context) : Tool {
                 error = "Provide 'package_name', or 'action' + 'uri'",
             )
         }
-        if (action != null && (action == Intent.ACTION_CALL || action.endsWith(".CALL"))) {
+        if (action != null && (action == Intent.ACTION_CALL ||
+                action == Intent.ACTION_CALL_PRIVILEGED || action.endsWith(".CALL"))
+        ) {
             return ToolResult(
                 ok = false,
                 output = "",
@@ -304,11 +306,9 @@ class ClipboardSetTool(private val context: Context) : Tool {
 }
 
 /**
- * Registers the computer-use tools on [registry]. Call once, e.g. next
- * to `ToolRegistry.withBuiltins(context)` — ToolRegistry.kt itself is
- * owned by another workstream and is deliberately NOT edited here.
- * Safe to call twice: registering replaces the previous tool of the
- * same name.
+ * Registers the computer-use tools on [registry]. Called by
+ * `ToolRegistry.withBuiltins`. Safe to call twice: registering replaces
+ * the previous tool of the same name.
  */
 fun registerComputerUseTools(registry: ToolRegistry, context: Context) {
     registry.register(SwipeTool)

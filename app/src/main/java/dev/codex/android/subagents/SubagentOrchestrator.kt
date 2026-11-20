@@ -158,7 +158,13 @@ class DefaultSubagentLoopFactory(
         val gate = DefaultApprovalGate()
         val base = ToolRegistry.withBuiltins(appContext)
         val gated = ToolRegistry().apply {
-            base.all().forEach { register(GlobGatedTool(it, effectiveRules)) }
+            base.all()
+                // The question tool queues for an answer no unattended
+                // run can ever receive, and generate_app is
+                // interactive-only: exclude both here, as interactive
+                // chat and automations do.
+                .filterNot { it.name in setOf("question", "generate_app") }
+                .forEach { register(GlobGatedTool(it, effectiveRules)) }
         }
         val client = OkHttpOpenAiClient(baseUrl = baseUrl, apiKey = apiKey, model = model)
         val memory = PersonalMemory(appContext)

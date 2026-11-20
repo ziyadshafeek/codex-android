@@ -309,6 +309,38 @@ class DocumentToolsTest {
     }
 
     @Test
+    fun textFileReadsUtf16LeWithBom() = runBlocking {
+        val file = temp.newFile("utf16le.txt")
+        val bytes = byteArrayOf(0xFF.toByte(), 0xFE.toByte()) +
+            "Hello UTF-16".toByteArray(Charsets.UTF_16LE)
+        file.writeBytes(bytes)
+        val result = ReadTextFileTool.execute(args(file.absolutePath))
+        assertTrue(result.ok)
+        assertTrue(result.output.contains("Hello UTF-16"))
+    }
+
+    @Test
+    fun textFileReadsUtf16BeWithBom() = runBlocking {
+        val file = temp.newFile("utf16be.txt")
+        val bytes = byteArrayOf(0xFE.toByte(), 0xFF.toByte()) +
+            "Hello UTF-16".toByteArray(Charsets.UTF_16BE)
+        file.writeBytes(bytes)
+        val result = ReadTextFileTool.execute(args(file.absolutePath))
+        assertTrue(result.ok)
+        assertTrue(result.output.contains("Hello UTF-16"))
+    }
+
+    @Test
+    fun textFileBoundsHugeFileInsteadOfLoadingItWhole() = runBlocking {
+        val file = temp.newFile("huge.txt")
+        file.writeText("x".repeat(3_000_000))
+        val result = ReadTextFileTool.execute(args(file.absolutePath))
+        assertTrue(result.ok)
+        assertTrue(result.output.contains("[truncated]"))
+        assertTrue(result.output.length < 100_020)
+    }
+
+    @Test
     fun toolNamesAndSchemas() {
         assertEquals("read_pdf", ReadPdfTool.name)
         assertEquals("read_document", ReadDocumentTool.name)
