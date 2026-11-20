@@ -44,6 +44,7 @@ import dev.codex.android.context.contextTokens
 import dev.codex.android.agent.AgentRuntime
 import dev.codex.android.tools.Attachment
 import dev.codex.android.tools.AttachmentIngest
+import dev.codex.android.tools.MAX_ATTACHMENTS_PER_MESSAGE
 import dev.codex.android.voice.VoiceInput
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -129,7 +130,7 @@ fun ChatScreen(
         ActivityResultContracts.OpenMultipleDocuments()
     ) { uris ->
         if (uris.isEmpty()) return@rememberLauncherForActivityResult
-        val remaining = AttachmentIngest.MAX_ATTACHMENTS_PER_MESSAGE - attachments.size
+        val remaining = MAX_ATTACHMENTS_PER_MESSAGE - attachments.size
         if (remaining <= 0) {
             attachError = "At most 3 files per message"
             return@rememberLauncherForActivityResult
