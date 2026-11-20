@@ -22,11 +22,20 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import dev.codex.android.browser.VerificationBrowser
+import dev.codex.android.data.CodexDatabase
+import dev.codex.android.data.CostTelemetry
+import dev.codex.android.data.TimelineMessage
+import dev.codex.android.linux.ProotShellEngine
 import dev.codex.android.subagents.SubagentInfo
+import dev.codex.android.terminal.TerminalStateHolder
+import dev.codex.android.tools.WorkspaceFileTools
+import dev.codex.android.ui.ComposerMode
 import dev.codex.android.ui.OledBlack
 import dev.codex.android.ui.OledSurface
 import dev.codex.android.ui.PreviewScreen
 import dev.codex.android.ui.WorkbenchScreen
+import dev.codex.android.ui.WorkbenchStateHolder
+import dev.codex.android.vcs.SnapshotEngine
 
 /** Pure layout decision helper: which 3-pane mode to show for a given window width. */
 enum class DesktopLayoutMode { THREE_PANE, TWO_PANE, SINGLE_PANE }
@@ -59,11 +68,17 @@ object DesktopLayout {
  * (`calculateWindowSizeClass(activity)` in MainActivity — see NOTES.md);
  * there is no custom WindowSizeClass enum in this file.
  *
+ * The left pane is the real [WorkbenchScreen], not a default/empty one:
+ * the DI root passes the same shared database, cost telemetry, file
+ * tools, terminal engine, thread state, subagents, state holders and
+ * snapshot engine MainActivity's own workbench branch uses, so the
+ * Terminal/Browser/Files tabs are live here too.
+ *
  * NOTE (verified 2026-11-20 against the staged H1–H3 sources): this file
  * composes [WorkbenchScreen] and [PreviewScreen] directly. [TerminalScreen]
  * (H2) and [SoraEditorScreen] (H3) are NOT composed here — they are reached
- * through WorkbenchScreen's Terminal / Files tab slots, which the integrator
- * wires in the DI root (see NOTES.md). [MissionControlPanel],
+ * through WorkbenchScreen's Terminal / Files tab slots, which the DI root
+ * wires (see NOTES.md). [MissionControlPanel],
  * [AgentTabContent], [ArtifactsListPanel] and [DiffCiTabContent] are H1
  * internals of WorkbenchScreen, not references from this file.
  */
@@ -72,10 +87,44 @@ fun DesktopWorkstation(
     windowSizeClass: WindowSizeClass,
     browser: VerificationBrowser,
     subagents: List<SubagentInfo> = emptyList(),
+    database: CodexDatabase? = null,
+    costTelemetry: CostTelemetry? = null,
+    workspaceFiles: WorkspaceFileTools? = null,
+    terminalEngine: ProotShellEngine? = null,
+    activeThreadId: String = "thr_default",
+    messages: List<TimelineMessage> = emptyList(),
+    stateHolder: WorkbenchStateHolder = remember { WorkbenchStateHolder() },
+    terminalStateHolder: TerminalStateHolder = remember { TerminalStateHolder() },
+    snapshotEngine: SnapshotEngine? = null,
+    onSelectThread: (String) -> Unit = {},
+    onSendPrompt: (prompt: String, mode: ComposerMode, attachedFiles: List<String>) -> Unit = { _, _, _ -> },
+    onOpenSettings: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val mode = DesktopLayout.modeFor(windowSizeClass.widthSizeClass)
     var activePane by remember { mutableStateOf(0) }
+
+    // The shared workbench, with the DI root's live state passed through
+    // (same instances MainActivity's own workbench branch uses).
+    val workbench: @Composable (Modifier) -> Unit = { workbenchModifier ->
+        WorkbenchScreen(
+            database = database,
+            costTelemetry = costTelemetry,
+            workspaceFiles = workspaceFiles,
+            terminalEngine = terminalEngine,
+            browser = browser,
+            activeThreadId = activeThreadId,
+            messages = messages,
+            subagents = subagents,
+            stateHolder = stateHolder,
+            terminalStateHolder = terminalStateHolder,
+            snapshotEngine = snapshotEngine,
+            onSelectThread = onSelectThread,
+            onSendPrompt = onSendPrompt,
+            onOpenSettings = onOpenSettings,
+            modifier = workbenchModifier,
+        )
+    }
 
     Surface(
         color = OledBlack,
@@ -85,7 +134,7 @@ fun DesktopWorkstation(
             DesktopLayoutMode.THREE_PANE -> {
                 Row(modifier = Modifier.fillMaxSize()) {
                     Box(modifier = Modifier.weight(0.42f)) {
-                        WorkbenchScreen(modifier = Modifier.fillMaxSize())
+                        workbench(Modifier.fillMaxSize())
                     }
                     Box(modifier = Modifier.weight(0.33f)) {
                         PreviewScreen(browser = browser, modifier = Modifier.fillMaxSize())
@@ -98,7 +147,7 @@ fun DesktopWorkstation(
             DesktopLayoutMode.TWO_PANE -> {
                 Row(modifier = Modifier.fillMaxSize()) {
                     Box(modifier = Modifier.weight(0.6f)) {
-                        WorkbenchScreen(modifier = Modifier.fillMaxSize())
+                        workbench(Modifier.fillMaxSize())
                     }
                     Column(modifier = Modifier.weight(0.4f)) {
                         // Working pane switcher: the staged file kept
@@ -130,7 +179,7 @@ fun DesktopWorkstation(
                 }
             }
             DesktopLayoutMode.SINGLE_PANE -> {
-                WorkbenchScreen(modifier = Modifier.fillMaxSize())
+                workbench(Modifier.fillMaxSize())
             }
         }
     }

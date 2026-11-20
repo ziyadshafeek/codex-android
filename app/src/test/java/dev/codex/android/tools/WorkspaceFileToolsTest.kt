@@ -261,4 +261,10 @@ class WorkspaceFileToolsTest {
         val result = tools.writeFile("plain.txt", "hello\n")
         assertEquals("Wrote 6 chars to plain.txt", result)
     }
+
+    @Test
+    fun rootDir_exposesCanonicalWorkspaceRoot() {
+        // The workbench editor opens real files under this root.
+        assertEquals(tempDir.canonicalFile, tools.rootDir)
+    }
 }

@@ -49,6 +49,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -77,6 +78,7 @@ import dev.codex.android.data.CodexDatabase
 import dev.codex.android.data.CostTelemetry
 import dev.codex.android.data.ThreadEntity
 import dev.codex.android.data.TimelineMessage
+import dev.codex.android.editor.SoraEditorScreen
 import dev.codex.android.linux.ProotShellEngine
 import dev.codex.android.subagents.SubagentInfo
 import dev.codex.android.terminal.TerminalScreen
@@ -84,6 +86,8 @@ import dev.codex.android.terminal.TerminalStateHolder
 import dev.codex.android.terminal.runBangCommand
 import dev.codex.android.tools.FileChangeSummary
 import dev.codex.android.tools.WorkspaceFileTools
+import dev.codex.android.vcs.SnapshotEngine
+import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -130,8 +134,10 @@ fun OledCodexTheme(content: @Composable () -> Unit) {
  * [terminalEngine]; the Browser tab hosts the real [PreviewScreen] (M7)
  * driven by [browser] — the same [VerificationBrowser] instance MainActivity
  * already constructs and shares with the agent's browser tools. The Files
- * tab accepts [filesTabContent] (H3 Sora editor) and falls back to a plain
- * file list. Pass [onSendPrompt]/[onSteer]/[onStop] from the integration;
+ * tab opens the real [SoraEditorScreen] (H3) for the tapped file (the
+ * file list is the fallback when no file is open); [snapshotEngine]
+ * backs Undo/Redo in the editor and Diff tabs and snapshots every
+ * editor save. Pass [onSendPrompt]/[onSteer]/[onStop] from the integration;
  * [onRunShellCommand] defaults to running `!cmd` through [terminalEngine]
  * via [runBangCommand] (output lands in the terminal tab) and only needs
  * an explicit value to route shell commands elsewhere.
@@ -150,6 +156,7 @@ fun WorkbenchScreen(
     subagents: List<SubagentInfo> = emptyList(),
     stateHolder: WorkbenchStateHolder = remember { WorkbenchStateHolder() },
     terminalStateHolder: TerminalStateHolder = remember { TerminalStateHolder() },
+    snapshotEngine: SnapshotEngine? = null,
     onSelectThread: (String) -> Unit = {},
     onSendPrompt: (prompt: String, mode: ComposerMode, attachedFiles: List<String>) -> Unit = { _, _, _ -> },
     onSteer: (threadId: String, instruction: String) -> Unit = { id, text -> AgentRuntime.steer(id, text) },
@@ -233,6 +240,50 @@ fun WorkbenchScreen(
     var fileChanges by remember { mutableStateOf<List<FileChangeSummary>>(emptyList()) }
     var commentVersion by remember { mutableStateOf(0) }
 
+    // Files-tab editor state: the tapped file opens the real Sora editor;
+    // null means the file list. `editorVersion` re-creates the editor
+    // (reloading disk content) after an undo/redo.
+    var openFilePath by remember { mutableStateOf<String?>(null) }
+    var editorVersion by remember { mutableStateOf(0) }
+
+    // Reloads the file list + diff state from disk/DB (Main-safe: the
+    // I/O runs on Dispatchers.IO, the state writes land on Main).
+    val refreshFiles: suspend () -> Unit = {
+        if (workspaceFiles != null) {
+            val (files, changes) = withContext(Dispatchers.IO) {
+                val f = runCatching { workspaceFiles.listFiles(maxResults = 300) }.getOrDefault(emptyList())
+                val c = runCatching { workspaceFiles.getChanges() }.getOrDefault(emptyList())
+                f to c
+            }
+            fileList = files
+            fileChanges = changes
+        }
+    }
+
+    // Runs one snapshot action (undo/redo) on IO; when it changed
+    // anything, the editor reloads from disk and the lists refresh.
+    fun runSnapshotAction(action: suspend SnapshotEngine.() -> Boolean) {
+        val engine = snapshotEngine ?: return
+        scope.launch {
+            val changed = withContext(Dispatchers.IO) {
+                runCatching { engine.action() }.getOrDefault(false)
+            }
+            if (changed) {
+                editorVersion++
+                refreshFiles()
+            }
+        }
+    }
+
+    // Snapshots an editor save (on IO, best-effort) and refreshes the
+    // file list / diff state so the save shows up immediately.
+    fun onEditorSaved(relativePath: String) {
+        scope.launch(Dispatchers.IO) {
+            runCatching { snapshotEngine?.snapshot("edit:$relativePath") }
+        }
+        scope.launch { refreshFiles() }
+    }
+
     // Zero disk/DB I/O on Main: hydrate Mission Control + Workspace state on Dispatchers.IO.
     LaunchedEffect(database, costTelemetry, activeThreadId, runtimeThreads.size) {
         val loadedThreads = withContext(Dispatchers.IO) {
@@ -258,15 +309,7 @@ fun WorkbenchScreen(
     }
 
     LaunchedEffect(workspaceFiles, uiState.activeTab) {
-        if (workspaceFiles != null) {
-            val (files, changes) = withContext(Dispatchers.IO) {
-                val f = runCatching { workspaceFiles.listFiles(maxResults = 300) }.getOrDefault(emptyList())
-                val c = runCatching { workspaceFiles.getChanges() }.getOrDefault(emptyList())
-                f to c
-            }
-            fileList = files
-            fileChanges = changes
-        }
+        refreshFiles()
     }
 
     val pendingComments = remember(activeThreadId, commentVersion) {
@@ -416,12 +459,36 @@ fun WorkbenchScreen(
                             )
 
                             WorkbenchTab.FILES -> {
-                                if (filesTabContent != null) {
-                                    filesTabContent(fileList, onOpenFile)
+                                val openPath = openFilePath
+                                val workspaceRoot = workspaceFiles?.rootDir
+                                if (openPath != null && workspaceRoot != null) {
+                                    EditorTabContent(
+                                        file = File(workspaceRoot, openPath),
+                                        relativePath = openPath,
+                                        proot = terminalEngine,
+                                        snapshotEngine = snapshotEngine,
+                                        editorVersion = editorVersion,
+                                        onBack = { openFilePath = null },
+                                        onUndo = { runSnapshotAction { undo() } },
+                                        onRedo = { runSnapshotAction { redo() } },
+                                        onSaved = { onEditorSaved(openPath) },
+                                        onPinToComposer = { pin ->
+                                            stateHolder.insertPin(pin)
+                                            stateHolder.selectTab(WorkbenchTab.AGENT)
+                                        },
+                                    )
+                                } else if (filesTabContent != null) {
+                                    filesTabContent(fileList) { path ->
+                                        openFilePath = path
+                                        onOpenFile(path)
+                                    }
                                 } else {
                                     FilesListTabContent(
                                         files = fileList,
-                                        onOpenFile = onOpenFile,
+                                        onOpenFile = { path ->
+                                            openFilePath = path
+                                            onOpenFile(path)
+                                        },
                                         onAttachToComposer = { path ->
                                             stateHolder.attachFile(path)
                                             stateHolder.selectTab(WorkbenchTab.AGENT)
@@ -438,6 +505,16 @@ fun WorkbenchScreen(
                                         val updated = workspaceFiles?.getChanges().orEmpty()
                                         withContext(Dispatchers.Main) { fileChanges = updated }
                                     }
+                                },
+                                onUndo = if (snapshotEngine != null) {
+                                    { runSnapshotAction { undo() } }
+                                } else {
+                                    null
+                                },
+                                onRedo = if (snapshotEngine != null) {
+                                    { runSnapshotAction { redo() } }
+                                } else {
+                                    null
                                 },
                             )
 
@@ -1211,6 +1288,64 @@ fun PowerComposer(
     }
 }
 
+/**
+ * Files-tab editor view: the real Sora editor for the tapped file, with
+ * Back to the file list and Undo/Redo (backed by [SnapshotEngine])
+ * above it. `editorVersion` is a recompose key: bumping it recreates
+ * the editor so it reloads the file from disk (e.g. after undo/redo).
+ */
+@Composable
+private fun EditorTabContent(
+    file: File,
+    relativePath: String,
+    proot: ProotShellEngine?,
+    snapshotEngine: SnapshotEngine?,
+    editorVersion: Int,
+    onBack: () -> Unit,
+    onUndo: () -> Unit,
+    onRedo: () -> Unit,
+    onSaved: () -> Unit,
+    onPinToComposer: (String) -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().background(OledSurface).padding(horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(
+                onClick = onBack,
+                modifier = Modifier.testTag("workbench_editor_back"),
+            ) {
+                Text("← Files", fontFamily = FontFamily.Monospace)
+            }
+            if (snapshotEngine != null) {
+                TextButton(
+                    onClick = onUndo,
+                    modifier = Modifier.testTag("workbench_editor_undo"),
+                ) {
+                    Text("Undo", fontFamily = FontFamily.Monospace)
+                }
+                TextButton(
+                    onClick = onRedo,
+                    modifier = Modifier.testTag("workbench_editor_redo"),
+                ) {
+                    Text("Redo", fontFamily = FontFamily.Monospace)
+                }
+            }
+        }
+        key(editorVersion) {
+            SoraEditorScreen(
+                file = file,
+                onSave = { _, _ -> onSaved() },
+                relativePath = relativePath,
+                proot = proot,
+                onPinToComposer = onPinToComposer,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
 @Composable
 private fun FilesListTabContent(
     files: List<String>,
@@ -1264,47 +1399,74 @@ private fun FilesListTabContent(
 fun DiffCiTabContent(
     changes: List<FileChangeSummary>,
     onRevertFile: (String) -> Unit,
+    onUndo: (() -> Unit)? = null,
+    onRedo: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
-    if (changes.isEmpty()) {
-        Box(
-            modifier = modifier.fillMaxSize().padding(24.dp).testTag("workbench_diff_empty"),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = "Working tree clean.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        return
-    }
-    LazyColumn(
-        modifier = modifier.fillMaxSize().padding(12.dp).testTag("workbench_diff_list"),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        items(changes, key = { it.relativePath }) { change ->
-            Card(
-                colors = CardDefaults.cardColors(containerColor = OledSurfaceElevated),
-                modifier = Modifier.fillMaxWidth(),
+    Column(modifier = modifier.fillMaxSize()) {
+        if (onUndo != null || onRedo != null) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = "${change.relativePath} (+${change.addedLines}/-${change.removedLines})",
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.weight(1f),
-                        )
-                        TextButton(onClick = { onRevertFile(change.relativePath) }) {
-                            Text("Revert", color = OledAmber)
+                if (onUndo != null) {
+                    TextButton(
+                        onClick = onUndo,
+                        modifier = Modifier.testTag("workbench_diff_undo"),
+                    ) {
+                        Text("Undo", fontFamily = FontFamily.Monospace)
+                    }
+                }
+                if (onRedo != null) {
+                    TextButton(
+                        onClick = onRedo,
+                        modifier = Modifier.testTag("workbench_diff_redo"),
+                    ) {
+                        Text("Redo", fontFamily = FontFamily.Monospace)
+                    }
+                }
+            }
+        }
+        if (changes.isEmpty()) {
+            Box(
+                modifier = Modifier.weight(1f).fillMaxWidth().padding(24.dp).testTag("workbench_diff_empty"),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "Working tree clean.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.weight(1f).fillMaxWidth().padding(12.dp).testTag("workbench_diff_list"),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                items(changes, key = { it.relativePath }) { change ->
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = OledSurfaceElevated),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "${change.relativePath} (+${change.addedLines}/-${change.removedLines})",
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                TextButton(onClick = { onRevertFile(change.relativePath) }) {
+                                    Text("Revert", color = OledAmber)
+                                }
+                            }
+                            Text(
+                                text = change.unifiedDiff.take(2_000),
+                                fontFamily = FontFamily.Monospace,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
                         }
                     }
-                    Text(
-                        text = change.unifiedDiff.take(2_000),
-                        fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
                 }
             }
         }
