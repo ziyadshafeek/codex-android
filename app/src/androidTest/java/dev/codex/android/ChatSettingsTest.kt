@@ -314,6 +314,26 @@ class ChatSettingsTest {
     }
 
     @Test
+    fun settings_providerPresetAndListModelsRequireCredentials() {
+        skipOnboardingIfShown()
+        openSettings()
+        composeTestRule.onNodeWithTag("settings_provider").performClick()
+        composeTestRule.onNodeWithText("Coarena").assertIsDisplayed()
+        composeTestRule.onNodeWithText("NVIDIA NIM").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Custom").assertIsDisplayed()
+        composeTestRule.onNodeWithText("AI Studio").performClick()
+        val base = composeTestRule.onNodeWithTag("settings_base_url").fetchSemanticsNode().config
+            .getOrNull(SemanticsProperties.EditableText)?.text
+        val model = composeTestRule.onNodeWithTag("settings_model").fetchSemanticsNode().config
+            .getOrNull(SemanticsProperties.EditableText)?.text
+        assertEquals("https://generativelanguage.googleapis.com/v1beta/openai/", base)
+        assertEquals("gemini-4-hydrogen", model)
+        composeTestRule.onNodeWithTag("settings_clear_key").performScrollTo().performClick()
+        composeTestRule.onNodeWithTag("settings_list_models").performScrollTo().performClick()
+        composeTestRule.onNodeWithText("Enter an API key before listing models.").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
     fun settings_savePersistsBaseUrlAndModel() {
         skipOnboardingIfShown()
         openSettings()

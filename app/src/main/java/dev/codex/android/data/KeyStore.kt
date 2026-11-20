@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import dev.codex.android.api.endpointKey
 
 /**
  * On-device store for the user's own API credentials (BYOK — bring your own key).
@@ -16,8 +17,8 @@ import androidx.security.crypto.MasterKey
  * Storage is [EncryptedSharedPreferences] (AES256_GCM master key,
  * AES256_SIV key encryption, AES256_GCM value encryption). If encrypted
  * storage cannot be created (e.g. a broken keystore on some devices), this
- * falls back to plain [SharedPreferences] so the app still works; the
- * constructor never throws.
+ * falls back to plain [SharedPreferences] only for non-secret settings.
+ * API keys are unavailable when encrypted storage fails.
  */
 class KeyStore(context: Context) {
 
@@ -45,6 +46,7 @@ class KeyStore(context: Context) {
         @Volatile
         private var cachedPrefs: SharedPreferences? = null
         private val prefsLock = Any()
+        @Volatile private var encryptedProviderPrefsAvailable = false
         private var githubPrefs: SharedPreferences? = null
 
         // GitHub write credentials never fall back to plaintext storage.
@@ -79,14 +81,14 @@ class KeyStore(context: Context) {
             )
 
         private fun createPrefs(context: Context): SharedPreferences = try {
-            createEncryptedPrefs(context, PREFS_FILE)
+            createEncryptedPrefs(context, PREFS_FILE).also { encryptedProviderPrefsAvailable = true }
         } catch (e: Exception) {
             // Log only which store is in use — never the key or exception detail.
             Log.w(TAG, "encrypted store unavailable, using fallback store")
             context.getSharedPreferences(
                 "${PREFS_FILE}_fallback",
                 Context.MODE_PRIVATE,
-            )
+            ).also { it.edit().remove(KEY_API_KEY).apply() }
         }
     }
 
@@ -100,7 +102,10 @@ class KeyStore(context: Context) {
     private val prefs: SharedPreferences get() = prefsFor(appContext)
 
     /** The stored API key, or null when none has been set. */
-    fun getApiKey(): String? = prefs.getString(KEY_API_KEY, null)
+    fun getApiKey(): String? {
+        val store = prefs
+        return if (encryptedProviderPrefsAvailable) store.getString(KEY_API_KEY, null) else null
+    }
 
     /**
      * Stores the API key, trimmed. Blank keys are rejected (nothing is stored).
@@ -109,7 +114,9 @@ class KeyStore(context: Context) {
     fun setApiKey(key: String) {
         val trimmed = key.trim()
         if (trimmed.isBlank()) return
-        prefs.edit().putString(KEY_API_KEY, trimmed).apply()
+        val store = prefs
+        check(encryptedProviderPrefsAvailable) { "Encrypted API key storage is unavailable." }
+        store.edit().putString(KEY_API_KEY, trimmed).apply()
     }
 
     /** Removes the stored API key. */
@@ -134,6 +141,20 @@ class KeyStore(context: Context) {
     fun setModel(model: String) {
         prefs.edit().putString(KEY_MODEL, model.trim()).apply()
     }
+
+    /** Save a provider change atomically; never carry an old key to a different endpoint. */
+    internal fun saveProvider(baseUrl: String, model: String, newKey: String) {
+        val store = prefs
+        val key = newKey.trim()
+        if (key.isNotEmpty()) check(encryptedProviderPrefsAvailable) { "Encrypted API key storage is unavailable." }
+        val edit = store.edit().putString(KEY_BASE_URL, baseUrl.trim()).putString(KEY_MODEL, model.trim())
+        if (key.isNotEmpty()) edit.putString(KEY_API_KEY, key)
+        else if (endpointKey(getBaseUrl()) != endpointKey(baseUrl)) edit.remove(KEY_API_KEY)
+        edit.apply()
+    }
+
+    internal fun apiKeyFor(baseUrl: String): String? =
+        getApiKey()?.takeIf { endpointKey(getBaseUrl()) == endpointKey(baseUrl) }
 
     internal fun githubRepository(): String? = prefs.getString(KEY_GITHUB_REPO, null)
 

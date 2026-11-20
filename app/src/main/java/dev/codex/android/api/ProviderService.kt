@@ -1,5 +1,7 @@
 package dev.codex.android.api
 
+import dev.codex.android.core.CodexError
+import dev.codex.android.core.withRetry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -8,9 +10,13 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.IOException
+import java.time.Instant
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
 import java.util.concurrent.TimeUnit
 
 @Serializable
@@ -40,6 +46,7 @@ class ProviderService(
     private val httpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
+        .followRedirects(false)
         .build(),
 ) {
     private val json = Json { ignoreUnknownKeys = true }
@@ -52,13 +59,7 @@ class ProviderService(
      * under it (e.g. https://api.openai.com/v1/models), so stripping it
      * would break the request.
      */
-    fun normalizeBaseUrl(raw: String): String {
-        var url = raw.trim().trimEnd('/')
-        if (url.endsWith("/chat/completions")) {
-            url = url.removeSuffix("/chat/completions").trimEnd('/')
-        }
-        return url
-    }
+    fun normalizeBaseUrl(raw: String): String = endpointKey(raw)
 
     /**
      * Alias for [testAndFetchModels]: pings GET {baseUrl}/models with the
@@ -78,49 +79,56 @@ class ProviderService(
         rawBaseUrl: String,
         apiKey: String,
     ): ConnectionTestResult = withContext(Dispatchers.IO) {
-        val baseUrl = normalizeBaseUrl(rawBaseUrl)
-        if (baseUrl.isBlank() || (!baseUrl.startsWith("https://") && !baseUrl.startsWith("http://"))) {
-            return@withContext ConnectionTestResult.EndpointError(
-                0,
-                "Base URL must start with https:// or http://"
-            )
+        val baseUrl = normalizeBaseUrl(rawBaseUrl).toHttpUrlOrNull()
+        if (baseUrl == null || baseUrl.username.isNotEmpty() || baseUrl.password.isNotEmpty() ||
+            baseUrl.query != null || baseUrl.fragment != null
+        ) {
+            return@withContext ConnectionTestResult.EndpointError(0, "Enter a valid HTTP or HTTPS Base URL.")
         }
         val trimmedKey = apiKey.trim()
-        val requestBuilder = Request.Builder()
-            .url("$baseUrl/models")
+        if (trimmedKey.isEmpty() || trimmedKey.any { it.code !in 33..126 }) {
+            return@withContext ConnectionTestResult.AuthError(0, "Check your API key")
+        }
+        val request = Request.Builder()
+            .url(baseUrl.newBuilder().addPathSegment("models").build())
             .get()
             .header("Accept", "application/json")
-        if (trimmedKey.isNotEmpty()) {
-            requestBuilder.header("Authorization", "Bearer $trimmedKey")
-        }
-
-        val startMs = System.currentTimeMillis()
+            .header("Authorization", "Bearer $trimmedKey")
+            .build()
         try {
-            httpClient.newCall(requestBuilder.build()).execute().use { response ->
-                val latency = System.currentTimeMillis() - startMs
-                val bodyStr = response.body?.string().orEmpty()
-                when {
-                    response.isSuccessful -> {
-                        val models = parseModelIds(bodyStr)
-                        ConnectionTestResult.Success(models, latency)
-                    }
-                    response.code == 401 || response.code == 403 -> {
-                        ConnectionTestResult.AuthError(
-                            response.code,
-                            "Authentication failed (HTTP ${response.code}). Check your API key."
+            withRetry(isRetryable = { it is CodexError.RateLimit }) {
+                val startMs = System.currentTimeMillis()
+                httpClient.newCall(request).execute().use { response ->
+                    when {
+                        response.isSuccessful -> ConnectionTestResult.Success(
+                            parseModelIds(response.body?.string().orEmpty()), System.currentTimeMillis() - startMs,
                         )
-                    }
-                    else -> {
-                        ConnectionTestResult.EndpointError(
-                            response.code,
-                            "Endpoint returned HTTP ${response.code}. Verify Base URL includes /v1 if required."
+                        response.code == 401 || response.code == 403 ->
+                            ConnectionTestResult.AuthError(response.code, "Check your API key")
+                        response.code == 429 -> throw CodexError.RateLimit(
+                            retryAfterSeconds(response.header("Retry-After")),
+                        )
+                        else -> ConnectionTestResult.EndpointError(
+                            response.code, "Could not list models (HTTP ${response.code}). Check the Base URL.",
                         )
                     }
                 }
             }
+        } catch (e: CodexError.RateLimit) {
+            ConnectionTestResult.EndpointError(429, "The provider is still rate limiting requests. Try again later.")
         } catch (e: IOException) {
             ConnectionTestResult.NetworkError(e.message ?: e.javaClass.simpleName)
         }
+    }
+
+    private fun retryAfterSeconds(header: String?): Long? {
+        val value = header?.trim() ?: return null
+        val seconds = value.toLongOrNull() ?: runCatching {
+            val wait = ZonedDateTime.parse(value, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli() -
+                Instant.now().toEpochMilli()
+            (wait.coerceAtLeast(0) + 999) / 1000
+        }.getOrNull()
+        return seconds?.coerceIn(0, Long.MAX_VALUE / 1000)
     }
 
     private fun parseModelIds(body: String): List<String> {

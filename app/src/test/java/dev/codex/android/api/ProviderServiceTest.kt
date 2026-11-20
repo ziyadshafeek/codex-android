@@ -47,6 +47,46 @@ class ProviderServiceTest {
         )
         .build()
 
+    @Test
+    fun presetsUseExactRequestedEndpointsAndModels() {
+        assertEquals("https://coarena.ai/api/v1", ProviderPreset.COARENA.baseUrl)
+        assertEquals("gpt-6-luna", ProviderPreset.COARENA.model)
+        assertEquals("https://integrate.api.nvidia.com/v1", ProviderPreset.NVIDIA_NIM.baseUrl)
+        assertEquals("nvidia/nemotron-3-ultra-550b-a55b", ProviderPreset.NVIDIA_NIM.model)
+        assertEquals("https://generativelanguage.googleapis.com/v1beta/openai/", ProviderPreset.AI_STUDIO.baseUrl)
+        assertEquals("gemini-4-hydrogen", ProviderPreset.AI_STUDIO.model)
+        assertEquals(ProviderPreset.AI_STUDIO, ProviderPreset.forUrl("https://generativelanguage.googleapis.com/v1beta/openai"))
+        assertEquals(ProviderPreset.CUSTOM, ProviderPreset.forUrl(""))
+    }
+
+    @Test
+    fun blankApiKeyNeverMakesARequest() = runBlocking {
+        val client = OkHttpClient.Builder().addInterceptor { throw AssertionError("Must not request without a key") }.build()
+        val result = ProviderService(client).testAndFetchModels("https://api.example.com/v1", " ")
+        assertEquals(ConnectionTestResult.AuthError(0, "Check your API key"), result)
+    }
+
+    @Test
+    fun listModelsSendsBearerAndRetriesAfterRateLimit() = runBlocking {
+        val times = mutableListOf<Long>()
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            val request = chain.request()
+            assertEquals("GET", request.method)
+            assertEquals("/v1beta/openai/models", request.url.encodedPath)
+            assertEquals("Bearer test-key", request.header("Authorization"))
+            times += System.nanoTime()
+            val limited = times.size == 1
+            Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
+                .code(if (limited) 429 else 200).message("Test")
+                .header("Retry-After", "1")
+                .body("""{"data":[{"id":"gemini-4-hydrogen"}]}""".toResponseBody(jsonMediaType)).build()
+        }.build()
+        val result = ProviderService(client).testAndFetchModels(ProviderPreset.AI_STUDIO.baseUrl!!, " test-key ")
+        assertEquals(listOf("gemini-4-hydrogen"), (result as ConnectionTestResult.Success).modelIds)
+        assertEquals(2, times.size)
+        assertTrue("Retry was sent before Retry-After elapsed", times[1] - times[0] >= 950_000_000L)
+    }
+
     // --- normalizeBaseUrl ---
 
     @Test
