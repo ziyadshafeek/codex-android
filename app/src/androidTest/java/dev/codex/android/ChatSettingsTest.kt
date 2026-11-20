@@ -318,10 +318,10 @@ class ChatSettingsTest {
         skipOnboardingIfShown()
         openSettings()
         composeTestRule.onNodeWithTag("settings_provider").performClick()
-        composeTestRule.onNodeWithText("Coarena").assertIsDisplayed()
-        composeTestRule.onNodeWithText("NVIDIA NIM").assertIsDisplayed()
-        composeTestRule.onNodeWithText("Custom").assertIsDisplayed()
-        composeTestRule.onNodeWithText("AI Studio").performClick()
+        composeTestRule.onNodeWithTag("settings_provider_COARENA").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("settings_provider_NVIDIA_NIM").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("settings_provider_CUSTOM").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("settings_provider_AI_STUDIO").performClick()
         val base = composeTestRule.onNodeWithTag("settings_base_url").fetchSemanticsNode().config
             .getOrNull(SemanticsProperties.EditableText)?.text
         val model = composeTestRule.onNodeWithTag("settings_model").fetchSemanticsNode().config

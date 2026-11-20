@@ -147,14 +147,18 @@ fun SettingsScreen(viewModel: ChatViewModel, onBack: () -> Unit, onOpenHelp: () 
                 }
                 DropdownMenu(expanded = providerMenu, onDismissRequest = { providerMenu = false }) {
                     ProviderPreset.entries.forEach { option ->
-                        DropdownMenuItem(text = { Text(option.label) }, onClick = {
-                            providerMenu = false
-                            preset = option
-                            if (option.baseUrl != null && option.model != null) {
-                                changeBaseUrl(option.baseUrl)
-                                model = option.model
-                            } else resetModels()
-                        })
+                        DropdownMenuItem(
+                            text = { Text(option.label) },
+                            modifier = Modifier.testTag("settings_provider_${option.name}"),
+                            onClick = {
+                                providerMenu = false
+                                preset = option
+                                if (option.baseUrl != null && option.model != null) {
+                                    changeBaseUrl(option.baseUrl)
+                                    model = option.model
+                                } else resetModels()
+                            },
+                        )
                     }
                 }
             }
@@ -236,11 +240,11 @@ fun SettingsScreen(viewModel: ChatViewModel, onBack: () -> Unit, onOpenHelp: () 
                         Column {
                             providerStatus?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                             LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
-                            items(available, key = { it }) { id ->
-                                OutlinedButton(onClick = { saveProvider(id) }, modifier = Modifier.fillMaxWidth()) {
-                                    Text(id)
+                                items(available, key = { it }) { id ->
+                                    OutlinedButton(onClick = { saveProvider(id) }, modifier = Modifier.fillMaxWidth()) {
+                                        Text(id)
+                                    }
                                 }
-                            }
                             }
                         }
                     },
