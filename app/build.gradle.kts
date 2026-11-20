@@ -25,6 +25,9 @@ android {
     // without them are unaffected — no signingConfig is created or applied.
     // ANDROID_KEYSTORE_PATH is optional: it defaults to "release.keystore"
     // in the project root (where CI decodes ANDROID_KEYSTORE_BASE64).
+    // .trim(): a secret pasted into the GitHub UI can carry a trailing
+    // newline, which makes key decryption fail with "Given final block
+    // not properly padded" (CI run 44640870701).
     val releaseKeystorePresent = System.getenv("ANDROID_KEYSTORE_PASSWORD") != null
         && System.getenv("ANDROID_KEY_ALIAS") != null
         && System.getenv("ANDROID_KEY_PASSWORD") != null
@@ -32,9 +35,9 @@ android {
         signingConfigs {
             create("release") {
                 storeFile = file(System.getenv("ANDROID_KEYSTORE_PATH") ?: "release.keystore")
-                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
-                keyAlias = System.getenv("ANDROID_KEY_ALIAS")
-                keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")?.trim()
+                keyAlias = System.getenv("ANDROID_KEY_ALIAS")?.trim()
+                keyPassword = System.getenv("ANDROID_KEY_PASSWORD")?.trim()
             }
         }
     }

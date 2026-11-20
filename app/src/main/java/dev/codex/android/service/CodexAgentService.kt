@@ -153,6 +153,14 @@ class CodexAgentService : Service() {
         fun updateStatus(context: Context, text: String) {
             currentStatus = text
             val running = instance ?: return
+            // Never re-post startForeground while the service is not
+            // promoted (still starting, or being destroyed after stop()):
+            // the system rejects startForeground on a service that is
+            // not in the foreground with "Bad notification for
+            // startForeground" and crashes the process (CI run
+            // 44640870701). The text is already stored in [currentStatus]
+            // and shown on the next promotion.
+            if (!isForeground) return
             runCatching {
                 running.startForeground(
                     RUNNING_NOTIFICATION_ID,

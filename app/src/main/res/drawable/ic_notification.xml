@@ -1,0 +1,32 @@
+<!-- Notification small icon: a white terminal glyph on transparent.
+
+Must be a plain drawable, NOT the adaptive launcher icon: Android
+rejects an adaptive icon (R.mipmap.ic_launcher) as a notification small
+icon and crashes the process with
+"Bad notification for startForeground"
+(CannotPostForegroundServiceNotificationException, CI run 44640870701).
+Small icons are rendered white by the system; strokes here are white.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M4,5h16v14H4z" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M7,9l3,3 -3,3" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:pathData="M12,15h5" />
+</vector>

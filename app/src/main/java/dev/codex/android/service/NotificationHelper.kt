@@ -70,7 +70,11 @@ object NotificationHelper {
      */
     fun runningNotification(context: Context, text: String): Notification =
         NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            // A plain drawable, NOT the adaptive launcher icon:
+            // R.mipmap.ic_launcher is an adaptive icon and the system
+            // rejects it as a notification small icon ("Bad notification
+            // for startForeground", CI run 44640870701).
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("Codex")
             .setContentText(text)
             .setOngoing(true)
@@ -86,7 +90,9 @@ object NotificationHelper {
         runCatching {
             if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return
             val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-                .setSmallIcon(R.mipmap.ic_launcher)
+                // See runningNotification: plain drawable, not the
+                // adaptive launcher icon.
+                .setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle(title)
                 .setContentText(text)
                 .setAutoCancel(true)

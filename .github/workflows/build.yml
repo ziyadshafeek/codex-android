@@ -124,6 +124,24 @@ jobs:
         run: |
           echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$GITHUB_WORKSPACE/release.keystore"
 
+      # Validate the decoded keystore WITHOUT printing any secret value:
+      # only the file size and pass/fail lines are echoed. A wrong store
+      # password or alias fails here; a wrong key password fails later at
+      # packageRelease ("Given final block not properly padded") — that
+      # distinction is the diagnosis (CI run 44640870701).
+      - name: Validate release keystore
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/release.keystore
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          test -s "$ANDROID_KEYSTORE_PATH" || { echo "keystore file missing or empty"; exit 1; }
+          echo "keystore bytes: $(stat -c%s "$ANDROID_KEYSTORE_PATH")"
+          keytool -list -keystore "$ANDROID_KEYSTORE_PATH" -storepass "$ANDROID_KEYSTORE_PASSWORD" -alias "$ANDROID_KEY_ALIAS" >/dev/null 2>&1 \
+            || { echo "keystore store-password or alias check FAILED"; exit 1; }
+          echo "keystore store-password + alias OK"
+
       - name: Build release APK
         env:
           ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/release.keystore
