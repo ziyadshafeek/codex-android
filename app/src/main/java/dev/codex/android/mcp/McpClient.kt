@@ -25,6 +25,28 @@ data class McpToolDefinition(
     val inputSchema: JsonObject,
 )
 
+/** One resource a server exposes via `resources/list`. */
+data class McpResource(
+    val serverId: String,
+    val uri: String,
+    val name: String,
+    val mimeType: String?,
+)
+
+/**
+ * One resource's contents from `resources/read`. MCP returns either a
+ * `text` item or a `blob` item (base64); [blobBase64] non-null means the
+ * content is binary and must never be dumped as text.
+ */
+data class McpResourceContent(
+    val uri: String,
+    val mimeType: String?,
+    val text: String?,
+    val blobBase64: String?,
+) {
+    val isBinary: Boolean get() = blobBase64 != null
+}
+
 class McpClient(
     private val endpointUrl: String,
     private val bearerToken: String? = null,
@@ -37,6 +59,34 @@ class McpClient(
     private val idCounter = AtomicLong(1)
     @Volatile
     private var sessionId: String? = null
+
+    /**
+     * Server-initiated notifications captured opportunistically from SSE
+     * response bodies (see [McpEvent] KDoc for the honest limit: there is
+     * no persistent stream, so a notification is only ever seen when it
+     * rides along with a response to a request already in flight).
+     * Bounded ring buffer — oldest entries are dropped past [MAX_RECORDED_EVENTS].
+     */
+    private val recordedEvents = ArrayDeque<McpEvent>()
+    private val eventsLock = Any()
+
+    /** Snapshot of the notifications recorded so far, oldest first. */
+    fun recentNotifications(): List<McpEvent> = synchronized(eventsLock) {
+        recordedEvents.toList()
+    }
+
+    /** Clears the recorded notifications (called after the hub drains them). */
+    fun clearNotifications() {
+        synchronized(eventsLock) { recordedEvents.clear() }
+    }
+
+    private fun recordNotification(serverId: String, rawJson: String) {
+        val event = McpEvent.parseNotification(serverId, rawJson) ?: return
+        synchronized(eventsLock) {
+            recordedEvents += event
+            while (recordedEvents.size > MAX_RECORDED_EVENTS) recordedEvents.removeFirst()
+        }
+    }
 
     suspend fun initialize(): Boolean = withContext(Dispatchers.IO) {
         val params = buildJsonObject {
@@ -53,7 +103,7 @@ class McpClient(
 
     suspend fun listTools(serverId: String): List<McpToolDefinition> = withContext(Dispatchers.IO) {
         if (sessionId == null) initialize()
-        val resp = rpc("tools/list", buildJsonObject {})
+        val resp = rpc("tools/list", buildJsonObject {}, serverId)
         val toolsArray = resp["result"]?.jsonObject?.get("tools")?.jsonArray ?: return@withContext emptyList()
         toolsArray.mapNotNull { elem ->
             val obj = elem.jsonObject
@@ -82,7 +132,55 @@ class McpClient(
         }.joinToString("\n")
     }
 
-    private fun rpc(method: String, params: JsonObject): JsonObject {
+    /**
+     * `resources/list` — same JSON-RPC framing as [listTools]. Returns an
+     * empty list when the server exposes no resources (or no `resources`
+     * key); a JSON-RPC error / HTTP failure throws, like the other calls.
+     */
+    suspend fun listResources(serverId: String): List<McpResource> = withContext(Dispatchers.IO) {
+        if (sessionId == null) initialize()
+        val resp = rpc("resources/list", buildJsonObject {}, serverId)
+        val resourcesArray = resp["result"]?.jsonObject?.get("resources")?.jsonArray
+            ?: return@withContext emptyList()
+        resourcesArray.mapNotNull { elem ->
+            val obj = elem.jsonObject
+            val uri = obj["uri"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+            McpResource(
+                serverId = serverId,
+                uri = uri,
+                name = obj["name"]?.jsonPrimitive?.contentOrNull ?: uri,
+                mimeType = obj["mimeType"]?.jsonPrimitive?.contentOrNull,
+            )
+        }
+    }
+
+    /**
+     * `resources/read` for one [uri]. Returns the first content item; a
+     * `blob` item marks the content binary ([McpResourceContent.isBinary]).
+     * Throws [IOException] on transport failure or a JSON-RPC error, and
+     * when the server returns no contents at all.
+     */
+    suspend fun readResource(serverId: String, uri: String): McpResourceContent =
+        withContext(Dispatchers.IO) {
+            if (sessionId == null) initialize()
+            val params = buildJsonObject { put("uri", uri) }
+            val resp = rpc("resources/read", params, serverId)
+            val err = resp["error"]?.jsonObject
+            if (err != null) {
+                throw IOException("MCP error: ${err["message"]?.jsonPrimitive?.contentOrNull ?: err}")
+            }
+            val contents = resp["result"]?.jsonObject?.get("contents")?.jsonArray
+            val first = contents?.firstOrNull()?.jsonObject
+                ?: throw IOException("MCP resources/read returned no contents for $uri")
+            McpResourceContent(
+                uri = first["uri"]?.jsonPrimitive?.contentOrNull ?: uri,
+                mimeType = first["mimeType"]?.jsonPrimitive?.contentOrNull,
+                text = first["text"]?.jsonPrimitive?.contentOrNull,
+                blobBase64 = first["blob"]?.jsonPrimitive?.contentOrNull,
+            )
+        }
+
+    private fun rpc(method: String, params: JsonObject, serverId: String? = null): JsonObject {
         val payload = buildJsonObject {
             put("jsonrpc", "2.0")
             put("id", idCounter.getAndIncrement())
@@ -107,16 +205,37 @@ class McpClient(
             }
             val contentType = response.header("Content-Type").orEmpty()
             // Handle Streamable HTTP SSE envelope if server replies as text/event-stream.
+            // A server may interleave notifications (JSON-RPC messages with a
+            // "method" and no "id") among the response data lines: those are
+            // recorded via [recordNotification] and never mistaken for the
+            // response — the response is the last data line carrying an "id".
             val jsonPayload = if (contentType.contains("text/event-stream")) {
-                body.lineSequence()
+                val dataLines = body.lineSequence()
                     .filter { it.startsWith("data:") }
                     .map { it.removePrefix("data:").trim() }
-                    .lastOrNull { it.startsWith("{") }
-                    ?: throw IOException("Empty SSE MCP response")
+                    .filter { it.startsWith("{") }
+                    .toList()
+                val label = serverId ?: endpointUrl
+                var lastResponse: String? = null
+                for (line in dataLines) {
+                    val obj = runCatching { json.parseToJsonElement(line).jsonObject }.getOrNull()
+                    if (obj == null) continue
+                    if (obj.containsKey("id")) {
+                        lastResponse = line
+                    } else if (obj.containsKey("method")) {
+                        recordNotification(label, line)
+                    }
+                }
+                lastResponse ?: throw IOException("Empty SSE MCP response")
             } else {
                 body
             }
             return json.parseToJsonElement(jsonPayload).jsonObject
         }
+    }
+
+    companion object {
+        /** Cap on opportunistically recorded server notifications per client. */
+        const val MAX_RECORDED_EVENTS: Int = 100
     }
 }

@@ -86,6 +86,8 @@ private fun MemoryDialog(memory: PersonalMemory, onClose: () -> Unit) {
     var markdown by rememberSaveable { mutableStateOf("") }
     var savedSoul by remember { mutableStateOf("") }
     var soul by rememberSaveable { mutableStateOf<String?>(null) }
+    var savedUserName by remember { mutableStateOf("") }
+    var userName by rememberSaveable { mutableStateOf<String?>(null) }
     var feedback by remember { mutableStateOf<String?>(null) }
     var failed by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
@@ -110,13 +112,15 @@ private fun MemoryDialog(memory: PersonalMemory, onClose: () -> Unit) {
         syncNotes(memory.list())
         savedSoul = withContext(Dispatchers.IO) { memory.loadSoul() }
         if (soul == null) soul = savedSoul
+        savedUserName = memory.userName().orEmpty()
+        if (userName == null) userName = savedUserName
         loading = false
     }
 
     fun requestClose() {
         if (busy) return
         val pendingNote = editingNote && (note != originalNote || (originalKey == null && key.isNotBlank()))
-        if (markdown != savedMarkdown || soul.orEmpty() != savedSoul || pendingNote) confirmation = "close"
+        if (markdown != savedMarkdown || soul.orEmpty() != savedSoul || userName.orEmpty() != savedUserName || pendingNote) confirmation = "close"
         else onClose()
     }
 
@@ -251,7 +255,23 @@ private fun MemoryDialog(memory: PersonalMemory, onClose: () -> Unit) {
                         },
                         resetLabel = "Reload notes", resetWhenClean = true,
                     )
-                    MemoryTab.SOUL -> MarkdownEditor(
+                    MemoryTab.SOUL -> Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(userName.orEmpty(), { userName = it.take(100); feedback = null },
+                            label = { Text("Your name") }, placeholder = { Text("How should Codex address you?") },
+                            enabled = !busy, singleLine = true, modifier = Modifier.fillMaxWidth().testTag("soul_user_name"))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Button(onClick = {
+                                change("Name saved.") {
+                                    memory.setUserName(userName.orEmpty())
+                                    savedUserName = userName.orEmpty().trim()
+                                    userName = savedUserName
+                                    null
+                                }
+                            }, enabled = !busy && userName.orEmpty() != savedUserName) { Text("Save name") }
+                            Text("Used only to address you in chat. Leave empty to stay unnamed.",
+                                style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                        }
+                        MarkdownEditor(
                         title = "Soul.md", text = soul.orEmpty(), onChange = { soul = it; feedback = null },
                         description = "Describe how Codex should communicate and work. Sent to your model on future runs. It cannot override safety or approvals. Save empty to restore the default.",
                         tag = "soul_markdown", maxLength = MAX_SOUL_LENGTH, dirty = soul.orEmpty() != savedSoul,
@@ -266,6 +286,7 @@ private fun MemoryDialog(memory: PersonalMemory, onClose: () -> Unit) {
                         onReset = { soul = savedSoul; feedback = null },
                         resetLabel = "Revert edits",
                     )
+                    }
                 }
                 feedback?.let {
                     Text(it, modifier = Modifier.padding(top = 4.dp).testTag("memory_status"),

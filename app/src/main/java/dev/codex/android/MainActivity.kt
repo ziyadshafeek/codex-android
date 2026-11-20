@@ -47,6 +47,7 @@ import dev.codex.android.hooks.HookExecution
 import dev.codex.android.kb.KnowledgeBase
 import dev.codex.android.linux.ProotShellEngine
 import dev.codex.android.linux.RootfsBootstrap
+import dev.codex.android.linux.ShellResult
 import dev.codex.android.mcp.JsonFileStdioConfigStore
 import dev.codex.android.mcp.McpHub
 import dev.codex.android.mcp.McpManager
@@ -70,6 +71,8 @@ import dev.codex.android.ui.PreviewScreen
 import dev.codex.android.ui.ReviewInboxScreen
 import dev.codex.android.ui.SettingsScreen
 import dev.codex.android.ui.ShareActivity
+import dev.codex.android.ui.SkillsScreen
+import dev.codex.android.ui.StorageScreen
 import dev.codex.android.ui.StoreScreen
 import dev.codex.android.ui.WorkbenchScreen
 import dev.codex.android.ui.WorkbenchStateHolder
@@ -206,6 +209,8 @@ class MainActivity : ComponentActivity() {
                         mutableStateOf(!onboardingPrefs.isComplete())
                     }
                     var showSettings by rememberSaveable { mutableStateOf(false) }
+                    var showSkills by remember { mutableStateOf(false) }
+                    var showStorage by remember { mutableStateOf(false) }
                     var showAutomations by remember { mutableStateOf(false) }
                     var createAutomation by remember { mutableStateOf(false) }
                     var showReviewInbox by remember { mutableStateOf(false) }
@@ -260,6 +265,14 @@ class MainActivity : ComponentActivity() {
                     }
                     val orchestrator = remember { SubagentOrchestrator(applicationContext, database) }
                     val subagents by orchestrator.subagents.collectAsState()
+                    // Hand the activity-owned orchestrator + MCP hub to the
+                    // ViewModel so the chat registry can offer the subagent
+                    // and MCP tools (chat-only registrations). Runs after
+                    // every composition; setting the same refs is harmless.
+                    SideEffect {
+                        viewModel.subagentOrchestrator = orchestrator
+                        viewModel.mcpHub = mcpHub
+                    }
                     @Suppress("UNUSED_VARIABLE")
                     val contextEngine = remember { ContextEngine(database, workspaceDir) }
                     @Suppress("UNUSED_VARIABLE")
@@ -290,6 +303,14 @@ class MainActivity : ComponentActivity() {
                     }
                     val chatMessages by viewModel.messages.collectAsState()
                     val activeThreadId by viewModel.activeThreadId.collectAsState()
+                    // Context meter: the workbench shows a live CTX %
+                    // fed by the ViewModel's per-run estimate.
+                    // updateContextUsage used to have no caller, so the
+                    // meter was stuck at 0%.
+                    val contextUsage by viewModel.contextUsage.collectAsState()
+                    LaunchedEffect(contextUsage) {
+                        workbenchStateHolder.updateContextUsage(contextUsage.first, contextUsage.second)
+                    }
                     val workbenchMessages = chatMessages.mapIndexed { index, msg ->
                         TimelineMessage(
                             id = index.toLong(),
@@ -312,7 +333,13 @@ class MainActivity : ComponentActivity() {
                         showHistory -> {
                             HistoryScreen(
                                 viewModel = viewModel,
-                                onBack = { showHistory = false }
+                                onBack = { showHistory = false },
+                                // Tapping a row opens its thread, then
+                                // returns to the chat view.
+                                onOpenThread = { entry ->
+                                    viewModel.openThread(entry.threadId)
+                                    showHistory = false
+                                }
                             )
                         }
                         showStore -> {
@@ -359,12 +386,40 @@ class MainActivity : ComponentActivity() {
                             onOpenReview = { showReviewInbox = true },
                             onBack = { showAutomations = false },
                         )
+                        // showSkills is checked BEFORE showSettings: opening
+                        // Skills from Settings leaves showSettings true, so
+                        // the Skills branch must win or it never shows.
+                        showSkills -> {
+                            SkillsScreen(
+                                onBack = { showSkills = false },
+                            )
+                        }
+                        // showStorage is checked BEFORE showSettings for the
+                        // same reason: it is opened from Settings.
+                        showStorage -> {
+                            StorageScreen(
+                                workspace = workspaceFiles,
+                                fileLibrary = viewModel.fileLibrary,
+                                rootfsManager = RootfsBootstrap.manager(applicationContext),
+                                shell = { command ->
+                                    if (!RootfsBootstrap.ensure(applicationContext)) {
+                                        ShellResult(127, "", "Linux setup failed. Open Workbench → Terminal and tap Retry.")
+                                    } else {
+                                        terminalEngine.shellExec(command)
+                                    }
+                                },
+                                onBack = { showStorage = false },
+                                onReinstallLinux = { RootfsBootstrap.ensure(applicationContext, retry = true) },
+                            )
+                        }
                         showSettings -> {
                             SettingsScreen(
                                 viewModel = viewModel,
                                 onBack = { showSettings = false },
                                 onOpenHelp = { showHelp = true },
                                 onOpenAutomations = { showAutomations = true },
+                                onOpenSkills = { showSkills = true },
+                                onOpenStorage = { showStorage = true },
                             )
                         }
                         showWorkbench -> {

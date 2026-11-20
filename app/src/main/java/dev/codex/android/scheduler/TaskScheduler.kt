@@ -46,6 +46,23 @@ object TaskScheduler {
         }
     }
 
+    /**
+     * Suspend version of [schedule] for callers that must know whether
+     * the task was actually persisted and armed before reporting success
+     * (e.g. the schedule_task tool, whose "Scheduled" reply must be
+     * true): returns true only when the store save AND the alarm arming
+     * both succeeded. Never throws.
+     */
+    suspend fun scheduleNow(context: Context, task: ScheduledTask): Boolean {
+        val appContext = context.applicationContext ?: context
+        return try {
+            if (!ScheduledTaskStore(appContext).save(task)) return false
+            armAlarmNow(appContext, task)
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     /** Cancels the alarm for [taskId] and removes the task from the store. Never throws. */
     fun cancel(context: Context, taskId: String) {
         val appContext = context.applicationContext ?: context
@@ -104,11 +121,16 @@ object TaskScheduler {
         }
     }
 
-    /** Arms a single alarm for [task]; exact when permitted, inexact otherwise. */
+    /** Arms a single alarm for [task]; exact when permitted, inexact otherwise. Never throws. */
     private fun armAlarm(context: Context, task: ScheduledTask) {
-        try {
+        armAlarmNow(context, task)
+    }
+
+    /** Arms a single alarm for [task]; returns false when the arm failed. Never throws. */
+    private fun armAlarmNow(context: Context, task: ScheduledTask): Boolean {
+        return try {
             val alarmManager =
-                context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
+                context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return false
             val pendingIntent = buildPendingIntent(context, task.id)
             val exactAllowed = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 alarmManager.canScheduleExactAlarms()
@@ -128,8 +150,10 @@ object TaskScheduler {
                     pendingIntent,
                 )
             }
+            true
         } catch (e: Exception) {
             // Swallowed — a failed arm must never crash the caller.
+            false
         }
     }
 

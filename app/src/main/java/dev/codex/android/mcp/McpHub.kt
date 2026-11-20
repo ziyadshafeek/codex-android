@@ -387,6 +387,134 @@ class McpHub(
         SecretScrubber.scrub(raw)
     }
 
+    // --- Resources ---
+
+    /**
+     * Lists the resources a server exposes (`resources/list`). Remote
+     * servers go through the manager; stdio servers fail fast — the
+     * [StdioTransport] seam has no resources method (no stdio transport
+     * exists yet), so claiming otherwise would be a lie.
+     */
+    suspend fun listResources(serverId: String): List<McpResource> = withContext(Dispatchers.IO) {
+        if (stdioConfig(serverId) != null) {
+            throw IllegalStateException(
+                "MCP server $serverId is a stdio server: resources are not supported " +
+                    "until a stdio transport exists (see StdioTransport KDoc)"
+            )
+        }
+        val server = remoteServer(serverId)
+        ensureConnectedRemote(server)
+        mcpManager.listResources(serverId)
+    }
+
+    /**
+     * Reads one resource (`resources/read`). The raw content is scrubbed
+     * like every other MCP result before it reaches the agent.
+     */
+    suspend fun readResource(serverId: String, uri: String): McpResourceContent =
+        withContext(Dispatchers.IO) {
+            if (stdioConfig(serverId) != null) {
+                throw IllegalStateException(
+                    "MCP server $serverId is a stdio server: resources are not supported " +
+                        "until a stdio transport exists (see StdioTransport KDoc)"
+                )
+            }
+            val server = remoteServer(serverId)
+            ensureConnectedRemote(server)
+            val raw = mcpManager.readResource(serverId, uri)
+            if (raw.text != null) raw.copy(text = SecretScrubber.scrub(raw.text)) else raw
+        }
+
+    // --- Events (poll-based change detection + opportunistic notifications) ---
+
+    private val changeMutex = Mutex()
+    private val lastKnownTools = HashMap<String, Set<String>>()
+    private val lastKnownResources = HashMap<String, Set<String>>()
+
+    /**
+     * Notifications recorded opportunistically by the connected clients
+     * since the last drain (see [McpEvent] KDoc — this is NOT a live push
+     * feed). Stdio servers contribute none: no stdio transport exists.
+     * [serverId] restricts to one server; null returns all servers'.
+     */
+    suspend fun recentEvents(serverId: String? = null): List<McpEvent> = withContext(Dispatchers.IO) {
+        val events = mcpManager.recentNotifications()
+        if (serverId == null) events else events.filter { it.serverId == serverId }
+    }
+
+    /**
+     * Poll-based change check: re-lists tools (and resources, remote
+     * only) for [serverId] — or every registered server when null — and
+     * diffs against the snapshot from the previous check. The first
+     * check for a server records the baseline ([McpServerChange.baseline]
+     * = true) and reports no additions/removals. Also drains the
+     * opportunistically recorded notifications. A server whose re-list
+     * fails is reported with [McpServerChange.error] instead of
+     * aborting the whole check.
+     */
+    suspend fun checkForChanges(serverId: String? = null): List<McpServerChange> =
+        withContext(Dispatchers.IO) {
+            val drained = recentEvents(serverId)
+            val targets: List<Pair<String, String>> = if (serverId != null) {
+                val stdio = stdioConfig(serverId)
+                if (stdio != null) {
+                    listOf(serverId to stdio.name)
+                } else {
+                    listOf(serverId to remoteServer(serverId).name)
+                }
+            } else {
+                listAllServers().map { server ->
+                    when (server) {
+                        is HubServer.Remote -> server.entity.id to server.entity.name
+                        is HubServer.Stdio -> server.config.id to server.config.name
+                    }
+                }
+            }
+            val out = mutableListOf<McpServerChange>()
+            for ((id, name) in targets) {
+                val serverEvents = drained.filter { it.serverId == id }
+                try {
+                    val toolNames = listTools(id).toSet()
+                    val resourceUris = runCatching { listResources(id).map { it.uri }.toSet() }
+                        .getOrDefault(emptySet())
+                    val (addedTools, removedTools) = changeMutex.withLock {
+                        val previous = lastKnownTools[id]
+                        lastKnownTools[id] = toolNames
+                        // Null-check `previous` directly (not via a separate
+                        // boolean) so the compiler smart-casts it non-null.
+                        if (previous == null) emptyList<String>() to emptyList<String>()
+                        else diffNameSets(previous, toolNames)
+                    }
+                    val (addedResources, removedResources, baseline) = changeMutex.withLock {
+                        val previous = lastKnownResources[id]
+                        lastKnownResources[id] = resourceUris
+                        val diff = if (previous == null) emptyList<String>() to emptyList<String>()
+                        else diffNameSets(previous, resourceUris)
+                        Triple(diff.first, diff.second, previous == null)
+                    }
+                    out += McpServerChange(
+                        serverId = id,
+                        serverName = name,
+                        baseline = baseline,
+                        addedTools = addedTools,
+                        removedTools = removedTools,
+                        addedResources = addedResources,
+                        removedResources = removedResources,
+                        notifications = serverEvents,
+                    )
+                } catch (e: Exception) {
+                    out += McpServerChange(
+                        serverId = id,
+                        serverName = name,
+                        baseline = false,
+                        notifications = serverEvents,
+                        error = SecretScrubber.scrub(e.message ?: e.javaClass.simpleName),
+                    )
+                }
+            }
+            out
+        }
+
     /**
      * Registers all tools from [serverId] as scrubbing [Tool]s in the
      * agent's [ToolRegistry], so the agent can call them like

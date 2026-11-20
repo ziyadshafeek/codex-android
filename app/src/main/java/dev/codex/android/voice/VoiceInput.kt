@@ -121,9 +121,12 @@ class VoiceInput(
         try {
             recognizer?.stopListening()
         } catch (_: Exception) {
-            // A dead recognizer is already stopped; the error path below
-            // (or the destroy) covers the state update.
-            listening = false
+            // A dead recognizer is already stopped, but it is still
+            // holding its resources: release it here (onResults/onError
+            // will not fire for a dead recognizer), so the next
+            // startListening() does not create a second recognizer
+            // while this one still holds the mic.
+            releaseRecognizer()
             listener.onListeningChanged(false)
         }
     }

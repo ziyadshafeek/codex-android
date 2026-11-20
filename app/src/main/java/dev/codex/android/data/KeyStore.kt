@@ -182,6 +182,22 @@ class KeyStore(context: Context) {
 
     internal fun soulMarkdown(): String = prefs.getString("agent_soul_markdown", "").orEmpty()
 
+    /**
+     * The user's name, or null when never set. Non-secret — used only
+     * to address the user in the system prompt. No stored profile
+     * existed before this; this single field is the whole profile.
+     */
+    internal fun userName(): String? =
+        prefs.getString("user_name", null)?.trim()?.takeIf { it.isNotBlank() }
+
+    /** Stores the user's name, trimmed and capped. Blank clears it. */
+    internal fun setUserName(name: String) {
+        val trimmed = name.trim()
+        prefs.edit().apply {
+            if (trimmed.isBlank()) remove("user_name") else putString("user_name", trimmed.take(100))
+        }.apply()
+    }
+
     internal fun saveSoulMarkdown(text: String): Boolean = prefs.edit().apply {
         if (text.isBlank()) remove("agent_soul_markdown") else putString("agent_soul_markdown", text)
     }.commit()

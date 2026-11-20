@@ -39,6 +39,22 @@ data class TimelineMessage(
     val createdAt: Long = System.currentTimeMillis(),
 )
 
+/**
+ * One [searchMessages] hit. Only the message's own fields are returned:
+ * `metadata_json` is deliberately NOT selected — it can carry
+ * implementation markers, never user text — and no other table is read,
+ * so nothing that could hold a credential (KeyStore values, MCP bearer
+ * tokens) can leak through a search.
+ */
+data class SessionSearchHit(
+    val threadId: String,
+    val threadTitle: String,
+    val messageId: Long,
+    val role: String,
+    val content: String,
+    val createdAt: Long,
+)
+
 data class AutomationEntity(
     val id: String,
     val name: String,
@@ -603,6 +619,53 @@ class CodexDatabase(context: Context) :
             }
             updateThreadState(threadId)
         }
+
+    /**
+     * Case-insensitive substring search over past sessions (LIKE fallback,
+     * same pattern as [searchKnowledgeEntries] — there is deliberately NO
+     * FTS5 table). Matches message `content` and, optionally via the same
+     * term, thread `title`; [threadId] restricts the search to one thread.
+     * Rows are fetched with `LIMIT` in SQL, never loaded whole into memory.
+     * Blank query returns an empty list (never "all"). Messages whose
+     * `thread_id` is NULL (pre-v2 rows) have no thread and are not returned.
+     */
+    suspend fun searchMessages(
+        query: String,
+        threadId: String? = null,
+        limit: Int = 20,
+    ): List<SessionSearchHit> = withContext(Dispatchers.IO) {
+        val trimmed = query.trim()
+        if (trimmed.isEmpty()) return@withContext emptyList()
+        val like = "%${escapeLike(trimmed)}%"
+        val result = mutableListOf<SessionSearchHit>()
+        val sql = StringBuilder(
+            """
+            SELECT m.id, m.thread_id, t.title, m.role, m.content, m.created_at
+            FROM messages m JOIN threads t ON t.id = m.thread_id
+            WHERE (m.content LIKE ? ESCAPE '\' OR t.title LIKE ? ESCAPE '\')
+            """.trimIndent()
+        )
+        val args = mutableListOf(like, like)
+        if (threadId != null) {
+            sql.append(" AND m.thread_id = ?")
+            args += threadId
+        }
+        sql.append(" ORDER BY m.created_at DESC LIMIT ?")
+        args += limit.coerceAtLeast(1).toString()
+        readableDatabase.rawQuery(sql.toString(), args.toTypedArray()).use { c ->
+            while (c.moveToNext()) {
+                result += SessionSearchHit(
+                    messageId = c.getLong(0),
+                    threadId = c.getString(1),
+                    threadTitle = c.getString(2),
+                    role = c.getString(3),
+                    content = c.getString(4),
+                    createdAt = c.getLong(5),
+                )
+            }
+        }
+        result
+    }
 
     // --- Knowledge base (v3, H4) ---
 

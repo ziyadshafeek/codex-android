@@ -70,21 +70,28 @@ package dev.codex.android.agent
  *
  * ## Tool-name note — read before wiring this into the agent loop
  *
- * As of this writing there is NO `Tool` named `apply_patch`, `edit`, or
- * `write_file` registered in `ToolRegistry.withBuiltins` (which registers
- * `get_time`, `device_info`, `echo`, `open_app`, `tap`, `type_text`,
- * `read_screen`, `scroll`, `go_back`, `press_home`, `schedule_task`,
- * `generate_app`, `list_store`). The names returned by [requiredTools] are
- * therefore the *intended canonical* names from the M1-B spec and from the
- * OpenCode / Codex CLI convention — the `Tool` implementations themselves
- * are a separate workstream. Do not offer these tool names to a model until
- * they exist and are registered.
+ * The tools named by [requiredTools] now exist and are registered per
+ * chat thread in `ChatViewModel.policyGatedRegistry` (via
+ * `registerFileTools`): `edit`, `apply_patch` and `write_file`. They
+ * are NOT in `ToolRegistry.withBuiltins` — the file tools need the
+ * chat's shared `WorkspaceFileTools` instance (snapshots live per
+ * instance), so automations, sub-agents and the daemon do not offer
+ * them. Do not offer these tool names to a model until they exist and
+ * are registered.
  *
- * Related: `WorkspaceFileTools.applyPatch()` is a plain search-and-replace
- * snippet helper on an unregistered helper class, NOT the V4A `apply_patch`
- * envelope. A future `apply_patch` Tool must parse the V4A envelope
- * (add / update / move / delete, context-anchored hunks, validated before
- * any write) rather than merely wrapping that snippet helper.
+ * ## V4A honesty note
+ *
+ * OpenAI's Codex CLI `apply_patch` uses the purpose-built V4A grammar
+ * (`*** Begin Patch` / `*** Add File:` / `*** Update File:` / hunks
+ * anchored by `@@` context lines). This build's `apply_patch` tool
+ * does NOT parse V4A: it applies strict unified diffs (`---`/`+++`
+ * headers, `@@` hunks). GPT / Codex-family models are trained on V4A,
+ * so the tool description must tell the model the unified-diff format
+ * explicitly — and a model that emits a V4A patch anyway will get a
+ * clear parse error, not a silent mis-apply. A future V4A parser
+ * would be a new `UnifiedDiffApplier` mode, not a comment change.
+ * Related: `WorkspaceFileTools.applyPatch()` is a plain
+ * search-and-replace snippet helper, NOT the V4A envelope.
  */
 enum class EditStrategy {
     /** Single `apply_patch` tool (GPT / Codex-family models). */

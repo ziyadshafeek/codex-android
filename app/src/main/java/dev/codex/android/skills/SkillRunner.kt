@@ -23,4 +23,30 @@ object SkillRunner {
                 "Tools: ${skill.toolNames.joinToString(", ")}"
         }
     }
+
+    /** Finds the skill with [id] in [skills], or null when there is none. Pure. */
+    fun findSkill(skills: List<Skill>, id: String): Skill? =
+        skills.firstOrNull { it.id == id }
+
+    /**
+     * The text the `skill` tool returns when a skill is invoked: the
+     * skill's instructions, the user's request for it, and the hard
+     * rule that only its tools may be used until it is done. Pure.
+     * The agent loop enforces the tool list as well (see
+     * [dev.codex.android.agent.AgentLoop] + [ActiveSkillScope]); this
+     * text is what the model reads, the scope is what binds it.
+     */
+    fun buildSkillInvocation(skill: Skill, input: String?): String = buildString {
+        append("Running skill \"${skill.name}\" (${skill.id}).\n")
+        append("Instructions: ${skill.instructions}\n")
+        if (!input.isNullOrBlank()) append("User request: $input\n")
+        val tools = skill.toolNames.joinToString(", ")
+        if (tools.isEmpty()) {
+            append("This skill needs no tools — answer from the conversation.\n")
+        } else {
+            append("For this skill, use ONLY these tools: $tools. ")
+            append("Do not call any other tool until the skill is done. ")
+        }
+        append("To run a different skill instead, call the skill tool again with that skill's id.")
+    }
 }

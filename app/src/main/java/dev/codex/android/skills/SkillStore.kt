@@ -115,24 +115,17 @@ class SkillStore(context: Context) {
     }
 
     /**
-     * Inserts the built-in skills, but ONLY when the table is empty, so
-     * user edits to a built-in skill are never overwritten. Never throws.
+     * Inserts the built-in skills that are missing from the table, and
+     * never touches a row that already exists — so user edits (including
+     * disabling a built-in) and user-added skills are never overwritten.
+     * A phone that already has the original 3 skills gets the newer
+     * built-ins (document, image, Gemini, builder, and pure-instruction
+     * skills) backfilled on next launch; a fresh install gets all of
+     * them. Never throws.
      */
     suspend fun seedBuiltins() = withContext(Dispatchers.IO) {
         try {
             val db = database.writableDatabase
-            val count = db.query(
-                TABLE,
-                arrayOf("COUNT(*)"),
-                null,
-                null,
-                null,
-                null,
-                null,
-            ).use { cursor ->
-                if (cursor.moveToFirst()) cursor.getLong(0) else 0L
-            }
-            if (count > 0L) return@withContext
             for (skill in BUILTINS) {
                 val values = ContentValues().apply {
                     put("id", skill.id)
@@ -143,11 +136,13 @@ class SkillStore(context: Context) {
                     put("version", skill.version)
                     put("enabled", if (skill.enabled) 1 else 0)
                 }
+                // CONFLICT_IGNORE: an existing row (possibly user-edited)
+                // stays exactly as it is; only a missing id is inserted.
                 db.insertWithOnConflict(
                     TABLE,
                     null,
                     values,
-                    android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE,
+                    android.database.sqlite.SQLiteDatabase.CONFLICT_IGNORE,
                 )
             }
         } catch (e: Exception) {
@@ -194,7 +189,20 @@ class SkillStore(context: Context) {
             "enabled",
         )
 
-        /** The built-in skills seeded by [seedBuiltins] on a fresh install. */
+        /**
+         * The built-in skills seeded by [seedBuiltins] on a fresh install.
+         *
+         * The three original skills plus the v2.3.0 collections:
+         * [DOCUMENT_SKILLS] (docx/pdf/pptx/xlsx + resume/invoice),
+         * [ImageSkills.ALL] (full image skill — replaces the old minimal
+         * entry of the same id, which named only `attachment_read` —
+         * plus image-enhancer and image-generate), [InstructionSkills.ALL]
+         * (10 pure-instruction skills), [GeminiSkills.GEMINI_SKILLS] (4)
+         * and [BUILDER_SKILLS] (6). The old minimal `document` entry is
+         * gone: its job is covered by the four document skills. None of
+         * the minimal entries ever shipped in a released APK, so no
+         * migration is needed — the first install to seed these is v2.3.0.
+         */
         val BUILTINS: List<Skill> = listOf(
             Skill(
                 id = "summarise-screen",
@@ -223,6 +231,6 @@ class SkillStore(context: Context) {
                 version = 1,
                 enabled = true,
             ),
-        )
+        ) + DOCUMENT_SKILLS + ImageSkills.ALL + InstructionSkills.ALL + GeminiSkills.GEMINI_SKILLS + BUILDER_SKILLS
     }
 }

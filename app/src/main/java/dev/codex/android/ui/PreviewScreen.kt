@@ -46,9 +46,9 @@ import kotlinx.coroutines.launch
  * Preview tab UI for the verification browser (master plan Subsystem 6,
  * M7): URL bar, live page view, console drawer and screenshot view.
  *
- * Standalone composable taking the [VerificationBrowser] — NOT wired
- * into navigation yet; integration adds it as the Browser tab of the
- * workbench. The same browser instance is driven by the agent through
+ * Standalone composable taking the [VerificationBrowser] — wired into
+ * navigation from MainActivity (the Preview entry) and as the Browser
+ * tab of the workbench. The same browser instance is driven by the agent through
  * the browser_* tools, so the human and the agent always see the same
  * page: a URL the agent opens appears here, and a console error the
  * user sees here is what the agent reads via browser_console_logs.
@@ -142,16 +142,14 @@ fun PreviewScreen(
             )
         }
 
-        // Toolbar: reload, console drawer toggle, screenshot.
+        // Toolbar: console drawer toggle, screenshot. (Reload lives
+        // next to "Previous page" above, so there is exactly one.)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            TextButton(onClick = { scope.launch { browser.reload() } }) {
-                Text("Reload")
-            }
             TextButton(
                 onClick = { showConsole = !showConsole },
                 modifier = Modifier.testTag("preview_console_toggle"),

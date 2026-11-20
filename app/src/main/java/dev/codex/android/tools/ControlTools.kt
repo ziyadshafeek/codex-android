@@ -216,7 +216,11 @@ object ReadScreenTool : Tool {
     override val sensitive: Boolean = false
 
     override suspend fun execute(args: JsonObject): ToolResult {
-        if (!UiAutomation.isAvailable()) {
+        // The availability check itself must never crash the tool: if
+        // it throws (e.g. the service binding is in a bad state), the
+        // service is not usable, so fail fast with the same message
+        // as when it is simply off.
+        if (!runCatching { UiAutomation.isAvailable() }.getOrDefault(false)) {
             return ToolResult(ok = false, output = "", error = NOT_ENABLED_ERROR)
         }
         return try {

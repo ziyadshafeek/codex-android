@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -46,7 +47,9 @@ import kotlinx.coroutines.launch
  * The agent generates small apps from three templates (counter, notes,
  * timer) and lists them in a local catalogue with a moderation flag
  * (approved / pending). This screen saves source only; use Workbench
- * to publish a project and request its GitHub Actions build.
+ * to publish a project and request its GitHub Actions build. Pending
+ * listings can be approved or removed here; approved listings are
+ * listed under "Store" and can be removed here.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -62,6 +65,9 @@ fun StoreScreen(onBack: () -> Unit) {
     var appName by remember { mutableStateOf("") }
     var appDescription by remember { mutableStateOf("") }
     var statusMessage by remember { mutableStateOf<String?>(null) }
+    // Listing awaiting delete confirmation (null = no dialog). The delete
+    // itself runs only from the dialog's Delete button.
+    var deleteTarget by remember { mutableStateOf<StoreListing?>(null) }
 
     fun reload() {
         scope.launch {
@@ -71,6 +77,14 @@ fun StoreScreen(onBack: () -> Unit) {
             } catch (e: Exception) {
                 statusMessage = "Could not load the store: ${e.message}"
             }
+        }
+    }
+
+    fun approveListing(listing: StoreListing) {
+        scope.launch {
+            catalog.approve(listing.id)
+            statusMessage = "'${listing.name}' approved and listed in the Store."
+            reload()
         }
     }
 
@@ -233,7 +247,7 @@ fun StoreScreen(onBack: () -> Unit) {
                 }
             } else {
                 items(approved) { listing ->
-                    StoreRow(listing = listing)
+                    StoreRow(listing = listing, onDelete = { deleteTarget = listing })
                 }
             }
 
@@ -256,16 +270,67 @@ fun StoreScreen(onBack: () -> Unit) {
                 }
             } else {
                 items(pending) { listing ->
-                    StoreRow(listing = listing)
+                    StoreRow(
+                        listing = listing,
+                        onApprove = { approveListing(listing) },
+                        onDelete = { deleteTarget = listing },
+                    )
                 }
             }
+
+            // ---- Delete confirmation ----
+            // Rendered as a LazyColumn item so it survives recomposition;
+            // the dialog itself is a separate overlay composable below.
         }
+    }
+    // Delete confirmation dialog: confirm removes the listing AND its
+    // generated source folder, then verifies both are gone.
+    deleteTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { deleteTarget = null },
+            title = { Text("Delete \"${target.name}\"?") },
+            text = {
+                Text(
+                    "This removes the store listing and deletes its generated " +
+                        "source in workspace/generated/${target.appId}. " +
+                        "The app templates are not affected, and no APK was " +
+                        "built from this app, so there is nothing installed to remove."
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        deleteTarget = null
+                        scope.launch {
+                            try {
+                                val gone = catalog.deleteListingAndSource(
+                                    target,
+                                    File(context.filesDir, "workspace"),
+                                )
+                                statusMessage = if (gone) {
+                                    "Deleted '${target.name}': listing and generated source are gone."
+                                } else {
+                                    "Could not fully delete '${target.name}'. Check the store list — the listing or its source may still be there."
+                                }
+                            } catch (e: Exception) {
+                                statusMessage = "Could not delete '${target.name}': ${e.message}"
+                            }
+                            reload()
+                        }
+                    },
+                    modifier = Modifier.testTag("store_delete_confirm_${target.id}")
+                ) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteTarget = null }) { Text("Cancel") }
+            },
+        )
     }
 }
 
-/** One store row: name, one-line description, build status. */
+/** One store row: name, one-line description, build status, Approve (pending only) + Delete. */
 @Composable
-private fun StoreRow(listing: StoreListing) {
+private fun StoreRow(listing: StoreListing, onApprove: (() -> Unit)? = null, onDelete: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -290,6 +355,16 @@ private fun StoreRow(listing: StoreListing) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+            if (onApprove != null) {
+                TextButton(
+                    onClick = onApprove,
+                    modifier = Modifier.testTag("store_approve_${listing.id}")
+                ) { Text("Approve") }
+            }
+            TextButton(
+                onClick = onDelete,
+                modifier = Modifier.testTag("store_delete_${listing.id}")
+            ) { Text("Delete", color = MaterialTheme.colorScheme.error) }
         }
     }
 }
