@@ -66,7 +66,7 @@ internal fun changedWorkspaceOutputs(before: Map<String, WorkspaceStamp>, after:
 /** Only handle clear export requests locally, and never infer a file from multiple candidates. */
 internal fun requestedWorkspaceDownload(goal: String, recentPath: String?, lastAssistant: String?): String? {
     if (!Regex("""(?i)\b(?:download|export|(?:save|copy)\b.{0,100}\bdownloads)\b""").containsMatchIn(goal)) return null
-    if (Regex("""(?i)(?:https?://|\b(?:don't|do not|never)\b)""").containsMatchIn(goal)) return null
+    if (Regex("""(?i)(?:https?://|\b(?:don't|do not|never|and then)\b)""").containsMatchIn(goal)) return null
     val pathPattern = Regex("""(?<![\w./-])[\w-]+(?:/[\w.-]+)*\.[\w-]{1,20}\b""")
     val explicit = pathPattern.findAll(goal).map { it.value }.distinct().toList()
     if (explicit.isNotEmpty()) return explicit.singleOrNull()?.takeIf(::isDownloadablePath)

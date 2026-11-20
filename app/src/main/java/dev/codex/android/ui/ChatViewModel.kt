@@ -358,15 +358,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             KeyStore.warmUp(getApplication<Application>())
             refreshKeyState()
         }
-        viewModelScope.launch {
-            try {
-                planStore.loadLatest()?.let { plan ->
-                    append(ChatUiMessage("system", "Resumed plan: ${plan.goal}"))
-                }
-            } catch (e: Exception) {
-                // Never crash on a corrupt plan.
-            }
-        }
         // Seed built-in skills and restore recent chat history. All DB work
         // runs off the main thread, and a corrupt DB must never crash the
         // app or block the UI.

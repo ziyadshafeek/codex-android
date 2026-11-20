@@ -193,6 +193,13 @@ class AttachmentIntegrationTest {
                 assertEquals(html, destination.readText())
                 assertEquals(2, server.requestCount)
 
+                compose.onNodeWithTag("chat_input").performTextInput("can you save it in downloads")
+                compose.onNodeWithTag("chat_send").performClick()
+                compose.waitUntil(15_000) {
+                    compose.onAllNodesWithText("Tap Download on the file below", substring = true).fetchSemanticsNodes().isNotEmpty()
+                }
+                assertEquals(2, server.requestCount)
+
                 compose.onNodeWithTag("chat_workspace_files").performClick()
                 compose.waitUntil(15_000) { compose.onAllNodesWithTag("workspace_file_filter").fetchSemanticsNodes().isNotEmpty() }
                 compose.onNodeWithTag("workspace_file_filter").performTextInput("generated-attachment-test")

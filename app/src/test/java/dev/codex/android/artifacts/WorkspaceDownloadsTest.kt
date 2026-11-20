@@ -31,4 +31,10 @@ class WorkspaceDownloadsTest {
         assertThrows(Exception::class.java) { resolveWorkspaceDownload(workspace, "linked.txt") }
         assertThrows(Exception::class.java) { resolveWorkspaceDownload(workspace, "dir-link/outside.txt") }
     }
+    @org.junit.Test fun existingOutputCanBeOfferedByNameOrReferenceButNeverGuessedFromTwoFiles() {
+        assertEquals("test.html", requestedWorkspaceDownload("can you save it in downloads", null, "Saved as `test.html`."))
+        assertEquals("docs/report.pdf", requestedWorkspaceDownload("download docs/report.pdf", null, null))
+        org.junit.Assert.assertNull(requestedWorkspaceDownload("download it", "backup.txt", "Files: `a.txt` and `b.txt`"))
+        org.junit.Assert.assertNull(requestedWorkspaceDownload("do not download test.html", null, null))
+    }
 }
