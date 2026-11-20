@@ -115,25 +115,32 @@ class SkillStore(context: Context) {
     }
 
     /**
-     * Inserts the built-in skills, but ONLY when the table is empty, so
-     * user edits to a built-in skill are never overwritten. Never throws.
+     * Inserts any built-in skills that are missing from the table,
+     * without touching rows that already exist — so user edits to a
+     * built-in skill are never overwritten, and a new built-in still
+     * appears on an existing install whose table was seeded earlier
+     * with fewer skills. Never throws.
      */
     suspend fun seedBuiltins() = withContext(Dispatchers.IO) {
         try {
             val db = database.writableDatabase
-            val count = db.query(
+            val existingIds = db.query(
                 TABLE,
-                arrayOf("COUNT(*)"),
+                arrayOf("id"),
                 null,
                 null,
                 null,
                 null,
                 null,
             ).use { cursor ->
-                if (cursor.moveToFirst()) cursor.getLong(0) else 0L
+                buildSet {
+                    while (cursor.moveToNext()) {
+                        add(cursor.getString(0))
+                    }
+                }
             }
-            if (count > 0L) return@withContext
             for (skill in BUILTINS) {
+                if (skill.id in existingIds) continue
                 val values = ContentValues().apply {
                     put("id", skill.id)
                     put("name", skill.name)
@@ -147,7 +154,7 @@ class SkillStore(context: Context) {
                     TABLE,
                     null,
                     values,
-                    android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE,
+                    android.database.sqlite.SQLiteDatabase.CONFLICT_IGNORE,
                 )
             }
         } catch (e: Exception) {
@@ -220,6 +227,24 @@ class SkillStore(context: Context) {
                 description = "Tells the current date and time.",
                 instructions = "Use get_time and report the result.",
                 toolNames = listOf("get_time"),
+                version = 1,
+                enabled = true,
+            ),
+            Skill(
+                id = "document",
+                name = "Document analysis",
+                description = "Reads PDFs, Word, Excel, PowerPoint and text files and answers from them, citing pages.",
+                instructions = "When the user attaches or shares a document, or asks about a document, read it with the matching tool before answering: use read_pdf for PDF files and cite the page for each fact as [p. 3]; use read_document for Word, Excel and PowerPoint files; use read_text_file for plain text, Markdown and CSV files. Answer only from what the file actually contains. If a file is scanned or encrypted and no text can be read, say so clearly and do not invent text. Quote numbers and names from the source instead of paraphrasing them away.",
+                toolNames = listOf("read_pdf", "read_document", "read_text_file"),
+                version = 1,
+                enabled = true,
+            ),
+            Skill(
+                id = "image",
+                name = "Image analysis",
+                description = "Describes images, reads the text in them, and answers questions about what they show.",
+                instructions = "When the user attaches or shares an image, or asks about one, use read_image with the saved file path and a clear prompt for what is needed: describe what the image shows, read any text visible in it, or answer the specific question asked. Describe only what is actually visible in the image. If the image cannot be seen, say so clearly instead of guessing.",
+                toolNames = listOf("read_image"),
                 version = 1,
                 enabled = true,
             ),

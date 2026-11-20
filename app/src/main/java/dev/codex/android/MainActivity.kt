@@ -30,6 +30,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.ui.Modifier
+import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import dev.codex.android.agent.AgentRuntime
 import dev.codex.android.artifacts.InlineCommentStore
 import dev.codex.android.browser.VerificationBrowser
@@ -147,6 +148,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // PdfBox-Android (read_pdf): its font tables live in the AAR's
+        // assets, so initialise once at startup. A failure here never
+        // crashes the app — read_pdf falls back to its basic reader.
+        runCatching { PDFBoxResourceLoader.init(applicationContext) }
         // Verifiable artifacts: inline comments persist under filesDir so
         // they survive process death; without this the store is memory-only.
         InlineCommentStore.configure(File(filesDir, "inline_comments"))

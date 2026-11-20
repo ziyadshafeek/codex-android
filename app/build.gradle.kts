@@ -14,8 +14,8 @@ android {
         applicationId = "dev.codex.android"
         minSdk = 26
         targetSdk = 34
-        versionCode = 13
-        versionName = "2.2.0"
+        versionCode = 14
+        versionName = "2.3.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -101,6 +101,11 @@ dependencies {
     // no version here; the Compose BOM 2024.09.00 pins 1.3.0.
     implementation("androidx.compose.material3:material3-window-size-class")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // PdfBox-Android (Apache-2.0): PDF text extraction for read_pdf.
+    // The Android port of Apache PDFBox; its font tables live in the
+    // AAR's assets, so MainActivity calls PDFBoxResourceLoader.init
+    // once at startup (see DocumentTools.kt).
+    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
     // Termux terminal emulator + view (Apache-2.0) via JitPack (see settings.gradle.kts).
     // Modules built from the termux-app v0.118.1 tag.
     implementation("com.github.termux.termux-app:terminal-emulator:v0.118.1")

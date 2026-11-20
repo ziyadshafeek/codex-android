@@ -4,6 +4,7 @@ import dev.codex.android.core.CodexError
 import dev.codex.android.core.CodexJson
 import dev.codex.android.core.RetryPolicy
 import dev.codex.android.core.withRetry
+import dev.codex.android.tools.buildVisionRequestJson
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -104,6 +105,67 @@ class OkHttpOpenAiClient(
             ) {
                 chatOnce(messages, tools, effectiveModel, onPartialText)
             }
+        }
+    }
+
+    /**
+     * One non-streaming vision call: asks the model to describe an image.
+     *
+     * Sends a single chat-completions call whose user message carries the
+     * prompt as text plus the image as a `data:` URL. Reuses the same retry
+     * policy and HTTP error mapping as [chat], and the same non-streamed
+     * response parsing. Returns the model's text description.
+     *
+     * @throws CodexError.Network, CodexError.Auth, CodexError.RateLimit,
+     *   CodexError.Timeout, CodexError.Unknown on failure; Unknown when the
+     *   response carries no text.
+     */
+    suspend fun describeImage(prompt: String, base64Image: String, mimeType: String, model: String): String {
+        val effectiveModel = model.ifBlank { this.model }
+        // Blocking OkHttp execute() + body read: confine to the IO
+        // dispatcher, as in chat().
+        return withContext(Dispatchers.IO) {
+            withRetry(
+                policy = retryPolicy,
+                onRetryWait = { delayMs, error ->
+                    if (error is CodexError.RateLimit) onRateLimitWait?.invoke(delayMs)
+                },
+            ) {
+                describeImageOnce(prompt, base64Image, mimeType, effectiveModel)
+            }
+        }
+    }
+
+    private suspend fun describeImageOnce(
+        prompt: String,
+        base64Image: String,
+        mimeType: String,
+        model: String,
+    ): String {
+        val url = "${normaliseBaseUrl(baseUrl)}/chat/completions"
+        val bodyJson = buildVisionRequestJson(model, prompt, base64Image, mimeType)
+        val request = Request.Builder()
+            .url(url)
+            .header("Authorization", "Bearer $apiKey")
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .post(bodyJson.toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+        val response = try {
+            httpClient.newCall(request).execute()
+        } catch (e: IOException) {
+            throw CodexError.Network(e)
+        } catch (e: Exception) {
+            throw CodexError.Unknown("HTTP call failed: ${e.message}", e)
+        }
+        response.use { resp ->
+            if (!resp.isSuccessful) {
+                throw mapHttpError(resp.code, resp.header("Retry-After"), resp.body?.string())
+            }
+            val body = resp.body ?: throw CodexError.Unknown("Empty response body")
+            val result = readJsonBody(body.string())
+            return result.choices.firstOrNull()?.text?.takeIf { it.isNotBlank() }
+                ?: throw CodexError.Unknown("The model returned an empty description")
         }
     }
 

@@ -97,6 +97,10 @@ class ToolRegistry {
                 register(TodoReadTool(context))
                 register(WebFetchTool())
                 register(WebSearchTool(endpoint = "", apiKey = ""))
+                register(ReadPdfTool)
+                register(ReadDocumentTool)
+                register(ReadTextFileTool)
+                register(ReadImageTool(context))
             }
     }
 }

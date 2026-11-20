@@ -36,6 +36,7 @@ import dev.codex.android.data.CodexDatabase
 import dev.codex.android.data.ThreadEntity
 import dev.codex.android.data.TimelineMessage
 import dev.codex.android.data.WorkspaceEntity
+import dev.codex.android.tools.AttachmentIngest
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -100,14 +101,17 @@ internal fun openCodex(context: Context, threadId: String?) {
  * thread ([openCodex]).
  *
  * Content URIs are read only through [android.content.ContentResolver] —
- * a file path is never assumed. Text files are inlined (capped);
- * images and other files are recorded by name / type / size only, since
- * the chat is text-only and the URI permission grant ends with this
- * activity. A URI that cannot be read is recorded as such in the thread
- * instead of crashing; if nothing at all can be read, a clear error is
- * shown in this activity and no thread is created.
+ * a file path is never assumed. Shared images, PDFs, documents and text
+ * files are copied into the app's attachments folder and their content
+ * is included in the thread's first message: images as a saved-path
+ * marker the agent can analyse with read_image, PDFs / documents / text
+ * as extracted text (capped at [MAX_SHARED_FILE_TEXT_CHARS]). Other file
+ * types are recorded by name / type / size only, since no text can be
+ * read from them. A URI that cannot be read is recorded as such in the
+ * thread instead of crashing; if nothing at all can be read, a clear
+ * error is shown in this activity and no thread is created.
  *
- * No API key, no model call, no network — local DB writes only.
+ * No API key, no model call, no network — local file copy and DB writes only.
  */
 class ShareActivity : ComponentActivity() {
 
@@ -220,7 +224,7 @@ class ShareActivity : ComponentActivity() {
      * ContentResolver reads happen here. Never throws for an unreadable
      * URI — that is recorded in the message instead.
      */
-    private fun buildSharedMessage(intent: Intent): String {
+    private suspend fun buildSharedMessage(intent: Intent): String {
         val action = intent.action
         if (action != Intent.ACTION_SEND && action != Intent.ACTION_SEND_MULTIPLE) {
             throw IllegalArgumentException("Unsupported share action: $action")
@@ -239,7 +243,9 @@ class ShareActivity : ComponentActivity() {
                     text
                 }
             }
-        collectStreamUris(intent).forEach { uri -> parts += describeSharedUri(uri) }
+        for (uri in collectStreamUris(intent)) {
+            parts += describeSharedUri(uri)
+        }
         return parts.joinToString("\n\n").trim()
     }
 
@@ -267,9 +273,15 @@ class ShareActivity : ComponentActivity() {
     /**
      * One human-readable block per shared URI. Never assumes a file path
      * and never throws: when metadata or content cannot be read, the
-     * block records the name, type and size only.
+     * block records that instead of crashing.
+     *
+     * Images, PDFs, documents and text files are copied into the
+     * attachments folder and their content included (images as a
+     * saved-path marker for read_image; the rest as extracted text,
+     * capped at [MAX_SHARED_FILE_TEXT_CHARS]). Other file types keep
+     * the name / type / size-only line.
      */
-    private fun describeSharedUri(uri: Uri): String {
+    private suspend fun describeSharedUri(uri: Uri): String {
         val (displayName, size) = queryUriMeta(uri)
         val name = displayName
             ?: uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
@@ -278,25 +290,20 @@ class ShareActivity : ComponentActivity() {
         val mimeText = mime?.let { " ($it)" } ?: ""
         val sizeText = size?.let { " (${formatSize(it)})" } ?: ""
         return when {
-            mime?.startsWith("image/") == true ->
-                "Shared image: $name$mimeText$sizeText"
-            isInlineText(mime, name) -> {
-                val text = readTextContent(uri, MAX_SHARED_FILE_TEXT_CHARS)
-                if (text != null) {
-                    "Shared file: $name$mimeText$sizeText\n$text"
-                } else {
-                    "Shared file: $name$mimeText$sizeText"
-                }
+            AttachmentIngest.isImage(mime, name) ||
+                AttachmentIngest.isPdf(mime, name) ||
+                AttachmentIngest.isDocument(mime, name) ||
+                AttachmentIngest.isText(mime, name) -> {
+                // Copy + ingest. ingestForChat never throws: an
+                // unreadable file comes back as a note in the message.
+                val ingested = AttachmentIngest.ingestForChat(
+                    this, uri, name, mime, MAX_SHARED_FILE_TEXT_CHARS,
+                )
+                "Shared file: $name$mimeText$sizeText\n$ingested"
             }
             else ->
                 "Shared file: $name$mimeText$sizeText"
         }
-    }
-
-    private fun isInlineText(mime: String?, name: String): Boolean {
-        if (mime?.startsWith("text/") == true) return true
-        val lower = name.lowercase()
-        return TEXT_EXTENSIONS.any { lower.endsWith(it) }
     }
 
     /** Display name + size via OpenableColumns; nulls on any failure. */
@@ -316,31 +323,6 @@ class ShareActivity : ComponentActivity() {
             } ?: (null to null)
         } catch (_: Exception) {
             null to null
-        }
-    }
-
-    /**
-     * Reads a text file through the ContentResolver, capped at [maxChars]
-     * (with a truncation note). Returns null when the stream cannot be
-     * opened or read at all — the caller records that instead of crashing.
-     */
-    private fun readTextContent(uri: Uri, maxChars: Int): String? {
-        return try {
-            contentResolver.openInputStream(uri)?.use { stream ->
-                val reader = stream.bufferedReader(Charsets.UTF_8)
-                val out = StringBuilder()
-                val buf = CharArray(4096)
-                while (out.length < maxChars) {
-                    val read = reader.read(buf, 0, minOf(buf.size, maxChars - out.length))
-                    if (read <= 0) break
-                    out.append(buf, 0, read)
-                }
-                val truncated = reader.read() != -1
-                val text = out.toString()
-                if (truncated) "$text\n[File text truncated to $maxChars characters]" else text
-            }
-        } catch (_: Exception) {
-            null
         }
     }
 
@@ -369,9 +351,5 @@ class ShareActivity : ComponentActivity() {
         private const val TAG = "ShareActivity"
         private const val MAX_SHARED_TEXT_CHARS = 8000
         private const val MAX_SHARED_FILE_TEXT_CHARS = 32768
-        private val TEXT_EXTENSIONS = listOf(
-            ".txt", ".md", ".log", ".json", ".csv", ".xml",
-            ".kt", ".java", ".py", ".js", ".ts", ".toml", ".gradle",
-        )
     }
 }

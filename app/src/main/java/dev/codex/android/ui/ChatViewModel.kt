@@ -34,6 +34,8 @@ import dev.codex.android.security.PolicyDecision
 import dev.codex.android.security.SecretScrubber
 import dev.codex.android.security.ToolRisk
 import dev.codex.android.skills.SkillStore
+import dev.codex.android.tools.Attachment
+import dev.codex.android.tools.AttachmentIngest
 import dev.codex.android.tools.Tool
 import dev.codex.android.tools.ToolRegistry
 import dev.codex.android.tools.ToolResult
@@ -496,6 +498,49 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             } finally {
                 startingTurn = false
             }
+        }
+    }
+
+    /**
+     * Sends a goal with attached files. Each attachment is copied into
+     * the attachments folder and turned into text by
+     * [AttachmentIngest.ingestForChat] (extracted text, or an image
+     * marker for read_image), then the combined goal is sent through
+     * the existing [sendGoal] so its guards, history and memory
+     * behaviour are unchanged. A blank text with attachments sends
+     * just the ingested blocks; if nothing could be read at all, the
+     * goal still goes out with a note saying so — the message is never
+     * silently dropped.
+     */
+    fun sendGoalWithAttachments(text: String, attachments: List<Attachment>) {
+        if (attachments.isEmpty()) {
+            sendGoal(text)
+            return
+        }
+        val context = getApplication<Application>()
+        viewModelScope.launch {
+            val blocks = withContext(Dispatchers.IO) {
+                attachments.map { attachment ->
+                    AttachmentIngest.ingestForChat(
+                        context,
+                        attachment.uri,
+                        attachment.name,
+                        attachment.mimeType,
+                    )
+                }
+            }
+            val usable = blocks.filter { it.isNotBlank() }
+            val goal = buildString {
+                if (text.isNotBlank()) append(text.trim())
+                if (usable.isNotEmpty()) {
+                    if (isNotEmpty()) append("\n\n")
+                    append(usable.joinToString("\n\n"))
+                } else {
+                    if (isNotEmpty()) append("\n\n")
+                    append("[Attachments could not be read.]")
+                }
+            }
+            sendGoal(goal)
         }
     }
 

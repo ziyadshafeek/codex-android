@@ -2,6 +2,7 @@ package dev.codex.android.ui
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
@@ -41,6 +42,8 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import dev.codex.android.context.contextTokens
 import dev.codex.android.agent.AgentRuntime
+import dev.codex.android.tools.Attachment
+import dev.codex.android.tools.AttachmentIngest
 import dev.codex.android.voice.VoiceInput
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -61,6 +64,8 @@ fun ChatScreen(
     val rateLimitCountdown by viewModel.rateLimitCountdown.collectAsState()
     val listState = rememberLazyListState()
     var text by remember(activeThreadId) { mutableStateOf("") }
+    var attachments by remember(activeThreadId) { mutableStateOf<List<Attachment>>(emptyList()) }
+    var attachError by remember(activeThreadId) { mutableStateOf<String?>(null) }
 
     // M8 voice input + M1 Stop/Steer composer controls. The composable
     // calls AgentRuntime directly for stop/steer; the ViewModel-level
@@ -115,6 +120,56 @@ fun ChatScreen(
         } else {
             voiceError = "Microphone permission is needed for voice input."
         }
+    }
+
+    // Attach: pick up to 3 files (images, PDFs, documents, text). Files
+    // already attached count towards the 3; anything over 10 MB is
+    // rejected with an error line instead of being attached.
+    val attachLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        val remaining = AttachmentIngest.MAX_ATTACHMENTS_PER_MESSAGE - attachments.size
+        if (remaining <= 0) {
+            attachError = "At most 3 files per message"
+            return@rememberLauncherForActivityResult
+        }
+        val problems = mutableListOf<String>()
+        if (uris.size > remaining) {
+            problems += "At most 3 files per message - only the first $remaining were kept"
+        }
+        val kept = mutableListOf<Attachment>()
+        for (uri in uris.take(remaining)) {
+            var displayName: String? = null
+            var size: Long? = null
+            try {
+                context.contentResolver.query(
+                    uri,
+                    arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
+                    null, null, null,
+                )?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                        val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                        if (nameIndex >= 0) displayName = cursor.getString(nameIndex)
+                        if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) size = cursor.getLong(sizeIndex)
+                    }
+                }
+            } catch (_: Exception) {
+                // Name/size stay unknown; the copy step enforces the cap.
+            }
+            val name = displayName?.takeIf { it.isNotBlank() }
+                ?: uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
+                ?: "file"
+            val mime = runCatching { context.contentResolver.getType(uri) }.getOrNull()
+            if (AttachmentIngest.isOverSizeLimit(size)) {
+                problems += "\"$name\" is larger than 10 MB and was not attached"
+                continue
+            }
+            kept += Attachment(uri = uri, name = name, mimeType = mime, sizeBytes = size)
+        }
+        if (kept.isNotEmpty()) attachments = attachments + kept
+        attachError = if (problems.isEmpty()) null else problems.joinToString(". ")
     }
 
     LaunchedEffect(messages.size) {
@@ -272,6 +327,42 @@ fun ChatScreen(
                     modifier = Modifier.testTag("chat_compact")) { Text(if (compacting) "Summarising…" else "Summarise") }
                 if (text.isNotBlank()) Text("Draft ~${contextTokens(text)} tokens", style = MaterialTheme.typography.labelSmall)
             }
+            if (attachments.isNotEmpty()) {
+                Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+                    attachments.forEachIndexed { index, attachment ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = attachment.name,
+                                modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1
+                            )
+                            TextButton(
+                                onClick = {
+                                    attachments = attachments.filterIndexed { i, _ -> i != index }
+                                },
+                                modifier = Modifier.testTag("chat_attach_remove_$index")
+                            ) {
+                                Text("Remove")
+                            }
+                        }
+                    }
+                }
+            }
+            if (attachError != null) {
+                Text(
+                    text = attachError!!,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp)
+                        .testTag("chat_attach_error"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -284,6 +375,19 @@ fun ChatScreen(
                     placeholder = { Text("Ask Codex to do something…") },
                     modifier = Modifier.weight(1f).testTag("chat_input")
                 )
+                TextButton(
+                    onClick = {
+                        attachError = null
+                        try {
+                            attachLauncher.launch(ATTACH_MIME_TYPES)
+                        } catch (e: Exception) {
+                            attachError = "Could not open the file picker: ${e.message ?: "unknown error"}"
+                        }
+                    },
+                    modifier = Modifier.padding(start = 4.dp).testTag("chat_attach")
+                ) {
+                    Text("Attach")
+                }
                 TextButton(
                     onClick = {
                         if (isListening) {
@@ -319,13 +423,22 @@ fun ChatScreen(
                         if (isRunning) {
                             // M1: while a run is active, sending STEERS
                             // the active run instead of starting a new goal.
-                            activeThreadId?.let { AgentRuntime.steer(it, text) }
+                            if (text.isNotBlank()) {
+                                activeThreadId?.let { AgentRuntime.steer(it, text) }
+                            }
+                            text = ""
                         } else {
-                            viewModel.sendGoal(text)
+                            if (attachments.isNotEmpty()) {
+                                viewModel.sendGoalWithAttachments(text, attachments)
+                            } else {
+                                viewModel.sendGoal(text)
+                            }
+                            text = ""
+                            attachments = emptyList()
+                            attachError = null
                         }
-                        text = ""
                     },
-                    enabled = !compacting && text.isNotBlank() && (!isRunning || activeThreadId != null),
+                    enabled = !compacting && (text.isNotBlank() || (attachments.isNotEmpty() && !isRunning)) && (!isRunning || activeThreadId != null),
                     modifier = Modifier.padding(start = 8.dp).testTag("chat_send")
                 ) {
                     Text(if (isRunning) "Steer" else "Send")
@@ -349,3 +462,16 @@ fun ChatScreen(
     }
 
 }
+
+/** MIME types offered by the chat attach picker. */
+private val ATTACH_MIME_TYPES = arrayOf(
+    "image/*",
+    "application/pdf",
+    "text/*",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-powerpoint",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+)
