@@ -34,6 +34,8 @@ class KeyStore(context: Context) {
         private const val KEY_API_KEY = "api_key"
         private const val KEY_BASE_URL = "base_url"
         private const val KEY_MODEL = "model"
+        private const val KEY_GITHUB_REPO = "github_repo"
+        private const val KEY_GITHUB_TOKEN = "github_token"
         private const val TAG = "KeyStore"
 
         // Process-wide cache (diagnosis item 8): the encrypted store is
@@ -43,6 +45,13 @@ class KeyStore(context: Context) {
         @Volatile
         private var cachedPrefs: SharedPreferences? = null
         private val prefsLock = Any()
+        private var githubPrefs: SharedPreferences? = null
+
+        // GitHub write credentials never fall back to plaintext storage.
+        private fun githubPrefsFor(context: Context): SharedPreferences = synchronized(prefsLock) {
+            githubPrefs ?: createEncryptedPrefs(context.applicationContext, "codex_github_keys")
+                .also { githubPrefs = it }
+        }
 
         /** Returns the process-wide prefs instance, creating it once. */
         fun prefsFor(context: Context): SharedPreferences {
@@ -61,17 +70,16 @@ class KeyStore(context: Context) {
             prefsFor(context)
         }
 
-        private fun createPrefs(context: Context): SharedPreferences = try {
-            val masterKey = MasterKey.Builder(context)
-                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-                .build()
+        private fun createEncryptedPrefs(context: Context, name: String): SharedPreferences =
             EncryptedSharedPreferences.create(
-                context,
-                PREFS_FILE,
-                masterKey,
+                context, name,
+                MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build(),
                 EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
             )
+
+        private fun createPrefs(context: Context): SharedPreferences = try {
+            createEncryptedPrefs(context, PREFS_FILE)
         } catch (e: Exception) {
             // Log only which store is in use — never the key or exception detail.
             Log.w(TAG, "encrypted store unavailable, using fallback store")
@@ -125,6 +133,20 @@ class KeyStore(context: Context) {
     /** Stores the model name, trimmed (item 7). */
     fun setModel(model: String) {
         prefs.edit().putString(KEY_MODEL, model.trim()).apply()
+    }
+
+    internal fun githubRepository(): String? = prefs.getString(KEY_GITHUB_REPO, null)
+
+    internal fun githubToken(): String? = githubPrefsFor(appContext).getString(KEY_GITHUB_TOKEN, null)
+
+    internal fun saveGitHub(repository: String, token: String) {
+        if (token.isNotBlank()) githubPrefsFor(appContext).edit().putString(KEY_GITHUB_TOKEN, token.trim()).apply()
+        prefs.edit().putString(KEY_GITHUB_REPO, repository.trim()).apply()
+    }
+
+    internal fun clearGitHub() {
+        githubPrefsFor(appContext).edit().remove(KEY_GITHUB_TOKEN).apply()
+        prefs.edit().remove(KEY_GITHUB_REPO).apply()
     }
 
     /** True when a non-blank API key is stored. */

@@ -5,6 +5,11 @@ import dev.codex.android.linux.ProotShellEngine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import java.io.File
+import java.nio.file.FileVisitResult
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.SimpleFileVisitor
+import java.nio.file.attribute.BasicFileAttributes
 
 data class FileChangeSummary(
     val relativePath: String,
@@ -144,14 +149,19 @@ class WorkspaceFileTools(
 
     fun listFiles(relativeDir: String = "", maxResults: Int = 200): List<String> {
         val dir = if (relativeDir.isBlank()) rootCanonical else resolveSafe(relativeDir)
-        if (!dir.exists() || !dir.isDirectory) return emptyList()
-        return dir.walkTopDown()
-            .onEnter { it.name != ".git" && it.name != "build" && it.name != "node_modules" }
-            .filter { it.isFile }
-            .take(maxResults)
-            .map { relPath(it) }
-            .sorted()
-            .toList()
+        if (!dir.isDirectory || maxResults <= 0) return emptyList()
+        val results = mutableListOf<String>()
+        Files.walkFileTree(dir.toPath(), object : SimpleFileVisitor<Path>() {
+            override fun preVisitDirectory(path: Path, attrs: BasicFileAttributes): FileVisitResult =
+                if (path.fileName.toString() in setOf(".git", "build", "node_modules")) FileVisitResult.SKIP_SUBTREE
+                else FileVisitResult.CONTINUE
+
+            override fun visitFile(path: Path, attrs: BasicFileAttributes): FileVisitResult {
+                if (attrs.isRegularFile) results += relPath(path.toFile())
+                return if (results.size >= maxResults) FileVisitResult.TERMINATE else FileVisitResult.CONTINUE
+            }
+        })
+        return results.sorted()
     }
 
     fun searchText(query: String, maxMatches: Int = 50): String {

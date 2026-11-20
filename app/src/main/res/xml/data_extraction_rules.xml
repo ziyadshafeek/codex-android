@@ -25,6 +25,7 @@
              keyset): KeyStore.PREFS_FILE = "codex_keys" (+ "_fallback" variant). -->
         <exclude domain="sharedpref" path="codex_keys.xml" />
         <exclude domain="sharedpref" path="codex_keys_fallback.xml" />
+        <exclude domain="sharedpref" path="codex_github_keys.xml" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="database" path="codex.db" />
@@ -38,5 +39,6 @@
         <exclude domain="file" path="bin/daemon.env" />
         <exclude domain="sharedpref" path="codex_keys.xml" />
         <exclude domain="sharedpref" path="codex_keys_fallback.xml" />
+        <exclude domain="sharedpref" path="codex_github_keys.xml" />
     </device-transfer>
 </data-extraction-rules>

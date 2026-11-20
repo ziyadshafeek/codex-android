@@ -389,6 +389,60 @@ class GitHubActionsEngine(
         )
     }
 
+    /** Publishes the supplied text files in one commit without force-pushing. */
+    internal suspend fun publishFiles(
+        owner: String, repo: String, branch: String, message: String, files: Map<String, String>,
+    ): String {
+        require(branch.matches(Regex("codex/[A-Za-z0-9][A-Za-z0-9_-]{0,63}"))) { "Use a codex/<name> branch" }
+        require(files.isNotEmpty())
+        val base = "$apiBaseUrl/repos/$owner/$repo"
+        val defaultBranch = getJson(base, "Get repository").stringField("default_branch")
+        require(branch != defaultBranch) { "Cannot publish directly to the default branch" }
+        fun refUrl(ref: String) = base.toHttpUrl().newBuilder()
+            .addPathSegments("git/ref/heads").addPathSegments(ref).build().toString()
+        val existing = execute(authedBuilder(refUrl(branch)).get().build()).use { response ->
+            if (response.code == 404) null else {
+                checkResponse(response, "Get branch")
+                CodexJson.parseToJsonElement(response.body!!.string()).jsonObject["object"]!!.jsonObject.stringField("sha")
+            }
+        }
+        val parent = existing ?: getJson(refUrl(defaultBranch), "Get default branch")["object"]!!
+            .jsonObject.stringField("sha")
+        val parentTree = getJson("$base/git/commits/$parent", "Read base commit")["tree"]!!
+            .jsonObject.stringField("sha")
+        val tree = postJson("$base/git/trees", buildJsonObject {
+            put("base_tree", parentTree)
+            put("tree", kotlinx.serialization.json.JsonArray(files.map { (path, content) ->
+                buildJsonObject {
+                    put("path", path)
+                    put("mode", "100644")
+                    put("type", "blob")
+                    put("content", content)
+                }
+            }))
+        }, "Create source tree")!!.stringField("sha")
+        val commit = postJson("$base/git/commits", buildJsonObject {
+            put("message", message)
+            put("tree", tree)
+            put("parents", kotlinx.serialization.json.JsonArray(listOf(JsonPrimitive(parent))))
+        }, "Commit workspace files")!!.stringField("sha")
+        if (existing == null) {
+            postJson("$base/git/refs", buildJsonObject {
+                put("ref", "refs/heads/$branch")
+                put("sha", commit)
+            }, "Create build branch")
+        } else {
+            val url = base.toHttpUrl().newBuilder().addPathSegments("git/refs/heads/$branch").build()
+            val payload = buildJsonObject { put("sha", commit); put("force", false) }
+            checkResponse(execute(authedBuilder(url.toString()).patch(jsonBody(payload)).build()), "Update build branch").close()
+        }
+        return commit
+    }
+
+    private fun JsonObject.stringField(name: String): String =
+        this[name]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+            ?: throw CodexError.Unknown("GitHub response missing $name")
+
     /** POST .../actions/workflows/{workflowId}/dispatches — manually triggers a workflow. */
     suspend fun triggerWorkflow(
         owner: String,

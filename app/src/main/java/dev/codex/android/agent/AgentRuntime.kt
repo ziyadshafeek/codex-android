@@ -56,6 +56,9 @@ data class ThreadRuntimeState(
  * that carries a reason surfaces that reason in the timeline instead of
  * the generic "Stopped by user." text.
  */
+internal fun requiresInAppReview(toolName: String): Boolean =
+    toolName in setOf("workspace_write", "shell_exec", "github_publish", "github_build")
+
 object AgentRuntime {
 
     private const val APPROVAL_CHANNEL_ID = "codex_approvals"
@@ -284,10 +287,11 @@ object AgentRuntime {
             .setStyle(NotificationCompat.BigTextStyle().bigText("${approval.summary}\n${approval.payloadPreview}"))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setOngoing(true)
-            .addAction(0, "Approve", actionIntent(true, notifId + 1))
             .addAction(0, "Deny", actionIntent(false, notifId + 2))
-            .build()
-        nm.notify(notifId, notification)
+        if (!requiresInAppReview(approval.toolName)) {
+            notification.addAction(0, "Approve", actionIntent(true, notifId + 1))
+        }
+        nm.notify(notifId, notification.build())
     }
 
     private fun cancelApprovalNotification(context: Context, approvalId: String) {

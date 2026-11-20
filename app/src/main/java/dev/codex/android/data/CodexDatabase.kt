@@ -510,7 +510,7 @@ class CodexDatabase(context: Context) :
         rowId
     }
 
-    suspend fun getMessages(threadId: String, limit: Int = 200): List<TimelineMessage> =
+    suspend fun getMessages(threadId: String, limit: Int = 200, mostRecent: Boolean = false): List<TimelineMessage> =
         withContext(Dispatchers.IO) {
             val result = mutableListOf<TimelineMessage>()
             readableDatabase.rawQuery(
@@ -518,7 +518,7 @@ class CodexDatabase(context: Context) :
                 SELECT id, thread_id, role, kind, content, metadata_json, created_at
                 FROM messages
                 WHERE thread_id = ?
-                ORDER BY id ASC
+                ORDER BY id ${if (mostRecent) "DESC" else "ASC"}
                 LIMIT ?
                 """.trimIndent(),
                 arrayOf(threadId, limit.toString())
@@ -538,7 +538,7 @@ class CodexDatabase(context: Context) :
                     )
                 }
             }
-            result
+            if (mostRecent) result.asReversed() else result
         }
 
     /**

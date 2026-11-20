@@ -56,7 +56,6 @@ fun ChatScreen(
     val isRunning by viewModel.isRunning.collectAsState()
     val activeThreadId by viewModel.activeThreadId.collectAsState()
     val hasKey by viewModel.hasKey.collectAsState()
-    val pending by viewModel.gate.pending.collectAsState()
     val listState = rememberLazyListState()
     var text by remember { mutableStateOf("") }
 
@@ -324,11 +323,4 @@ fun ChatScreen(
         }
     }
 
-    if (pending != null) {
-        ApprovalDialog(
-            action = pending!!,
-            onApprove = { viewModel.approvePending(true) },
-            onDeny = { viewModel.approvePending(false) }
-        )
-    }
 }

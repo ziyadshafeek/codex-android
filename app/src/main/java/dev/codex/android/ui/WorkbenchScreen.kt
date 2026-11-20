@@ -4,6 +4,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -864,15 +865,17 @@ fun AgentTabContent(
                                 fontFamily = FontFamily.Monospace,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                            Text(
-                                text = msg.content,
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontFamily = if (msg.kind == "tool_call" || msg.kind == "diff") {
-                                    FontFamily.Monospace
-                                } else {
-                                    FontFamily.Default
-                                },
-                            )
+                            SelectionContainer {
+                                Text(
+                                    text = msg.content,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontFamily = if (msg.kind == "tool_call" || msg.kind == "diff") {
+                                        FontFamily.Monospace
+                                    } else {
+                                        FontFamily.Default
+                                    },
+                                )
+                            }
                         }
                     }
                 }

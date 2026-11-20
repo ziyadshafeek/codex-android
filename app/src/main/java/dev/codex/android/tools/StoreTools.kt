@@ -1,7 +1,6 @@
 package dev.codex.android.tools
 
 import android.content.Context
-import dev.codex.android.store.AppBuildStatus
 import dev.codex.android.store.AppGenerator
 import dev.codex.android.store.StoreCatalog
 import dev.codex.android.store.StoreListing
@@ -24,8 +23,8 @@ private fun emptyObjectSchema(): JsonObject = buildJsonObject {
 private val STORE_TEMPLATES: Set<String> = setOf("counter", "notes", "timer")
 
 /**
- * Generates an app from a template, requests its APK build on the build
- * service, and lists it in the store as pending moderation approval.
+ * Generates an app from a template, saves its source in the workspace,
+ * and lists it in the store as pending moderation approval.
  *
  * Not sensitive: generating an app and listing it unapproved is not in
  * the gated list (message / call / setting / money / delete). No payment
@@ -34,8 +33,8 @@ private val STORE_TEMPLATES: Set<String> = setOf("counter", "notes", "timer")
 class GenerateAppTool(private val context: Context) : Tool {
     override val name: String = "generate_app"
     override val description: String =
-        "Generates an app from a template (counter, notes, or timer), requests its APK " +
-            "build on the build service, and lists it in the store as pending approval"
+        "Saves source for a counter, notes, or timer template and creates a local store listing. " +
+            "Does not submit an APK build."
     override val parametersSchema: JsonObject = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
@@ -96,21 +95,20 @@ class GenerateAppTool(private val context: Context) : Tool {
 
         return try {
             val generated = AppGenerator.generate(name, description, template)
-            AppGenerator.requestBuild(generated)
+            val source = AppGenerator.saveSource(generated, java.io.File(context.filesDir, "workspace"))
             val listing = StoreListing(
                 id = generated.id,
                 appId = generated.id,
                 name = generated.name,
                 description = generated.description,
-                status = AppBuildStatus.BUILD_REQUESTED,
+                status = generated.status,
                 approved = false,
             )
             StoreCatalog(context).save(listing)
             ToolResult(
                 ok = true,
-                output = "Generated '$name' from the $template template. Build requested — " +
-                    "the APK build runs on the build service (not on this phone). " +
-                    "Listed in the store as pending approval.",
+                output = "Saved '$name' template source in $source and listed it as pending approval. " +
+                    "No APK build was started.",
             )
         } catch (e: IllegalArgumentException) {
             ToolResult(ok = false, output = "", error = e.message ?: "Invalid app details")

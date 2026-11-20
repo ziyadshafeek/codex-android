@@ -27,6 +27,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -38,6 +39,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.codex.android.service.BatteryHelper
+import dev.codex.android.tools.validGitHubRepository
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -48,6 +53,10 @@ fun SettingsScreen(viewModel: ChatViewModel, onBack: () -> Unit, onOpenHelp: () 
     var apiKey by remember { mutableStateOf("") }
     var saved by remember { mutableStateOf(false) }
 
+    var githubRepo by remember { mutableStateOf(keyStore.githubRepository().orEmpty()) }
+    var githubToken by remember { mutableStateOf("") }
+    var githubStatus by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var batteryExempt by remember { mutableStateOf(BatteryHelper.isExempt(context)) }
@@ -150,6 +159,46 @@ fun SettingsScreen(viewModel: ChatViewModel, onBack: () -> Unit, onOpenHelp: () 
             ) {
                 Text("Help")
             }
+            Spacer(modifier = Modifier.height(24.dp))
+            Text("GitHub Actions", style = MaterialTheme.typography.titleMedium)
+            Text("Use an existing build repository and a fine-grained token limited to that repository. " +
+                "Source publishing needs Contents write; manual builds need Actions write. " +
+                "Enter the token here, never in chat.")
+            OutlinedTextField(
+                value = githubRepo, onValueChange = { githubRepo = it },
+                label = { Text("GitHub repository (owner/repo)") },
+                singleLine = true, modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = githubToken, onValueChange = { githubToken = it },
+                label = { Text("GitHub token") }, singleLine = true,
+                visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(),
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = {
+                    val repo = githubRepo.trim()
+                    val token = githubToken
+                    githubToken = ""
+                    if (!validGitHubRepository(repo)) {
+                        githubStatus = "Use owner/repo (not a URL)."
+                    } else scope.launch {
+                        githubStatus = withContext(Dispatchers.IO) {
+                            runCatching { keyStore.saveGitHub(repo, token) }.fold(
+                                { "GitHub settings saved." }, { "Could not access encrypted GitHub storage." },
+                            )
+                        }
+                    }
+                }) { Text("Save GitHub") }
+                TextButton(onClick = {
+                    githubToken = ""
+                    scope.launch {
+                        val cleared = withContext(Dispatchers.IO) { runCatching { keyStore.clearGitHub() }.isSuccess }
+                        if (cleared) githubRepo = ""
+                        githubStatus = if (cleared) "GitHub settings cleared." else "Could not clear GitHub settings."
+                    }
+                }) { Text("Clear GitHub") }
+            }
+            if (githubStatus.isNotEmpty()) Text(githubStatus)
             Spacer(modifier = Modifier.height(24.dp))
             Text(
                 text = "Keep Codex alive",

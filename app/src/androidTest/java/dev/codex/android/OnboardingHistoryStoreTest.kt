@@ -279,19 +279,12 @@ class OnboardingHistoryStoreTest {
 
         composeTestRule.onNodeWithTag("store_generate").performClick()
 
-        // Generate runs in a coroutine (AppGenerator.generate, then
-        // requestBuild, then catalog.save, then reload), so wait for the
-        // status message rather than asserting immediately.
+        // The template store saves real source, without claiming to start a build.
+        val status = "Saved source for 'Test Counter'. No APK build was started."
         composeTestRule.waitUntil(timeoutMillis = 15_000) {
-            composeTestRule.onAllNodesWithText(
-                "Generated 'Test Counter'. Build requested. " +
-                    "Listed as pending approval."
-            ).fetchSemanticsNodes().isNotEmpty()
+            composeTestRule.onAllNodesWithText(status, substring = true).fetchSemanticsNodes().isNotEmpty()
         }
-        composeTestRule.onNodeWithText(
-            "Generated 'Test Counter'. Build requested. " +
-                "Listed as pending approval."
-        ).assertIsDisplayed()
+        composeTestRule.onNodeWithText(status, substring = true).assertIsDisplayed()
 
         // The new listing appears under "Pending approval" (approved=false)
         // with its name and description; the pending-empty text is gone.

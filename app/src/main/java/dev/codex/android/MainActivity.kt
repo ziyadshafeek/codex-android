@@ -48,14 +48,16 @@ import dev.codex.android.linux.RootfsBootstrap
 import dev.codex.android.mcp.JsonFileStdioConfigStore
 import dev.codex.android.mcp.McpHub
 import dev.codex.android.mcp.McpManager
+import dev.codex.android.security.ExecutionMode
 import dev.codex.android.server.CodexCli
 import dev.codex.android.server.DaemonAgentRunnerFactory
 import dev.codex.android.server.LocalDaemon
 import dev.codex.android.subagents.SubagentOrchestrator
 import dev.codex.android.terminal.TerminalStateHolder
-import dev.codex.android.tools.WorkspaceFileTools
+import dev.codex.android.ui.ApprovalDialog
 import dev.codex.android.ui.ChatScreen
 import dev.codex.android.ui.ChatViewModel
+import dev.codex.android.ui.ComposerMode
 import dev.codex.android.ui.HelpScreen
 import dev.codex.android.ui.HistoryScreen
 import dev.codex.android.ui.OnboardingScreen
@@ -251,7 +253,7 @@ class MainActivity : ComponentActivity() {
                             ),
                         )
                     }
-                    val workspaceFiles = remember { WorkspaceFileTools(workspaceDir, proot = terminalEngine) }
+                    val workspaceFiles = remember { viewModel.workspaceFileTools }
                     // Snapshot engine (H3): one per workspace, baseline
                     // captured on Dispatchers.IO below — never on Main.
                     val snapshotEngine = remember { SnapshotEngine(workspaceDir, filesDir, true) }
@@ -363,13 +365,7 @@ class MainActivity : ComponentActivity() {
                                     terminalStateHolder = terminalStateHolder,
                                     snapshotEngine = snapshotEngine,
                                     onSelectThread = { threadId -> viewModel.openThread(threadId) },
-                                    // ChatViewModel.sendGoal runs an AUTO turn
-                                    // on the active thread; the composer's
-                                    // BUILD/PLAN mode is not plumbed through
-                                    // sendGoal (it takes no mode), so a
-                                    // workbench prompt always starts a real
-                                    // AUTO turn.
-                                    onSendPrompt = { prompt, _, _ -> viewModel.sendGoal(prompt) },
+                                    onSendPrompt = { prompt, mode, _ -> viewModel.sendGoal(prompt, mode.toExecutionMode()) },
                                     onOpenSettings = { showSettings = true },
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -393,7 +389,7 @@ class MainActivity : ComponentActivity() {
                                     terminalStateHolder = terminalStateHolder,
                                     snapshotEngine = snapshotEngine,
                                     onSelectThread = { threadId -> viewModel.openThread(threadId) },
-                                    onSendPrompt = { prompt, _, _ -> viewModel.sendGoal(prompt) },
+                                    onSendPrompt = { prompt, mode, _ -> viewModel.sendGoal(prompt, mode.toExecutionMode()) },
                                     onOpenSettings = { showSettings = true },
                                 )
                             } else {
@@ -407,6 +403,14 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
                         }
+                    }
+                    val pendingApproval by viewModel.pendingApproval.collectAsState()
+                    pendingApproval?.let { approval ->
+                        ApprovalDialog(
+                            approval,
+                            onApprove = { AgentRuntime.answerApproval(applicationContext, approval.approvalId, true) },
+                            onDeny = { AgentRuntime.answerApproval(applicationContext, approval.approvalId, false) },
+                        )
                     }
                 }
             }
@@ -433,3 +437,6 @@ class MainActivity : ComponentActivity() {
         viewModel.openThread(threadId)
     }
 }
+
+private fun ComposerMode.toExecutionMode(): ExecutionMode =
+    if (this == ComposerMode.PLAN) ExecutionMode.PLAN else ExecutionMode.AUTO

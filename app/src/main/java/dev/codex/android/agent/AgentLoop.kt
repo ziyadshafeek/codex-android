@@ -45,18 +45,19 @@ class AgentLoop(
     private val planStore: PlanRepository,
     private val model: String,
     private val skills: List<Skill> = emptyList(),
+    private val recentConversation: List<ChatMessage> = emptyList(),
+    private val sessionInstructions: String = "",
 ) {
 
     /**
      * The system prompt for this run: [SYSTEM_PROMPT], plus the enabled
      * skills' instructions when any are present.
      */
-    private val systemPrompt: String =
-        if (skills.isEmpty()) {
-            SYSTEM_PROMPT
-        } else {
-            SYSTEM_PROMPT + "\n\nAvailable skills:\n" + SkillRunner.buildSkillPrompt(skills)
-        }
+    private val systemPrompt: String = buildString {
+        append(SYSTEM_PROMPT)
+        if (sessionInstructions.isNotBlank()) append("\n\n").append(sessionInstructions)
+        if (skills.isNotEmpty()) append("\n\nAvailable skills:\n").append(SkillRunner.buildSkillPrompt(skills))
+    }
 
     companion object {
         /** Hard cap on model turns per goal, so a run always terminates. */
@@ -104,10 +105,9 @@ class AgentLoop(
         planStore.save(plan)
         emitEvent(AgentEvent.PlanCreated(plan))
 
-        val messages = mutableListOf(
-            ChatMessage(role = "system", content = systemPrompt),
-            ChatMessage(role = "user", content = goal),
-        )
+        val messages = mutableListOf(ChatMessage(role = "system", content = systemPrompt))
+        messages.addAll(recentConversation)
+        messages.add(ChatMessage(role = "user", content = goal))
         val toolDefinitions = tools.definitions()
         var currentPlan = plan
         var lastAnswer = ""
