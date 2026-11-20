@@ -12,7 +12,7 @@ import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.codex.android.data.KeyStore
 import dev.codex.android.data.MemoryStore
-import dev.codex.android.data.PlanStore
+import dev.codex.android.agent.PlanStore
 import dev.codex.android.memory.PersonalMemory
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.runBlocking

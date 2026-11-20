@@ -510,18 +510,26 @@ class CodexDatabase(context: Context) :
         rowId
     }
 
-    suspend fun getMessages(threadId: String, limit: Int = 200, mostRecent: Boolean = false, kind: String? = null): List<TimelineMessage> =
+    suspend fun getMessages(
+        threadId: String,
+        limit: Int = 200,
+        mostRecent: Boolean = false,
+        kind: String? = null,
+        afterId: Long = 0,
+        conversationOnly: Boolean = false,
+    ): List<TimelineMessage> =
         withContext(Dispatchers.IO) {
             val result = mutableListOf<TimelineMessage>()
             readableDatabase.rawQuery(
                 """
                 SELECT id, thread_id, role, kind, content, metadata_json, created_at
                 FROM messages
-                WHERE thread_id = ? ${if (kind != null) "AND kind = ?" else ""}
+                WHERE thread_id = ? AND id > ? ${if (kind != null) "AND kind = ?" else ""}
+                  ${if (conversationOnly) "AND role IN ('user', 'assistant')" else ""}
                 ORDER BY id ${if (mostRecent) "DESC" else "ASC"}
                 LIMIT ?
                 """.trimIndent(),
-                listOfNotNull(threadId, kind, limit.toString()).toTypedArray()
+                listOfNotNull(threadId, afterId.toString(), kind, limit.toString()).toTypedArray()
             ).use { c ->
                 while (c.moveToNext()) {
                     result += TimelineMessage(
@@ -554,16 +562,20 @@ class CodexDatabase(context: Context) :
             db.beginTransaction()
             try {
                 db.delete("messages", "thread_id = ?", arrayOf(threadId))
+                val remapped = mutableListOf<Pair<Long, Long>>()
                 for (msg in messages) {
                     val cv = ContentValues().apply {
                         put("thread_id", threadId)
                         put("role", msg.role)
                         put("kind", msg.kind)
                         put("content", msg.content)
-                        put("metadata_json", msg.metadataJson)
+                        val cutoff = if (msg.kind == "summary") dev.codex.android.context.summaryCutoff(msg) else msg.id
+                        val newCutoff = remapped.lastOrNull { (old, _) -> old <= cutoff }?.second ?: 0L
+                        put("metadata_json", if (msg.kind == "summary" && cutoff != msg.id) """{"through":$newCutoff}""" else msg.metadataJson)
                         put("created_at", msg.createdAt)
                     }
-                    db.insert("messages", null, cv)
+                    val newId = db.insertOrThrow("messages", null, cv)
+                    remapped += msg.id to newId
                 }
                 db.setTransactionSuccessful()
             } finally {

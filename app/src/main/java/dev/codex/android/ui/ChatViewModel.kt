@@ -9,13 +9,11 @@ import dev.codex.android.agent.AgentRuntime
 import dev.codex.android.agent.PendingApproval
 import dev.codex.android.agent.PlanStore
 import dev.codex.android.agent.requiresInAppReview
-import dev.codex.android.api.ChatMessage
-import dev.codex.android.api.ProviderService
 import dev.codex.android.browser.VerificationBrowser
 import dev.codex.android.browser.browserTools
-import dev.codex.android.commands.CommandContext
-import dev.codex.android.commands.SlashCommandRouter
-import dev.codex.android.commands.SummariseResult
+import dev.codex.android.context.ConversationContext
+import dev.codex.android.context.buildConversationContext
+import dev.codex.android.context.historyBudget
 import dev.codex.android.api.OkHttpOpenAiClient
 import dev.codex.android.ci.GitHubActionsEngine
 import dev.codex.android.linux.ProotShellEngine
@@ -387,20 +385,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val db = CodexDatabase.getInstance(getApplication())
                 val client = OkHttpOpenAiClient(baseUrl = base, apiKey = key, model = model)
-                val previous = db.getMessages(threadId, 1, mostRecent = true, kind = "summary").lastOrNull()?.id
-                val result = SlashCommandRouter.handle("/compact", CommandContext(
-                    threadId, CodexDatabase.DEFAULT_PHONE_WORKSPACE_ID, db, keyStore, ProviderService(),
-                    skillStore, AgentRuntime.policy, workspaceFileTools,
-                    summarise = { prompt ->
-                        val reply = client.chat(listOf(ChatMessage("user", SecretScrubber.scrub(prompt))), emptyList(), model)
-                        SummariseResult.Ok(SecretScrubber.scrub(reply.choices.firstOrNull()?.text.orEmpty()))
-                    },
-                ))
-                val latest = db.getMessages(threadId, 1, mostRecent = true, kind = "summary").lastOrNull()
-                if (latest != null && latest.id != previous) {
-                    append(ChatUiMessage("system", latest.content, contextSummary = true))
-                }
-                append(ChatUiMessage("system", result.text))
+                val conversation = ConversationContext(db)
+                val latest = conversation.compact(threadId, client, model, historyBudget(keyStore.contextTokens()),
+                    automatic = false, previous = conversation.latest(threadId))
+                if (latest == null) append(ChatUiMessage("system", "No new chat messages to summarise."))
+                else append(ChatUiMessage("system", latest.content, contextSummary = true))
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
@@ -633,16 +622,29 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         } catch (e: Exception) {
             emptyList()
         }
-        // The runtime appended this turn's goal before invoking its runner.
-        val history = db.getMessages(threadId, limit = 32, mostRecent = true)
-        val summary = db.getMessages(threadId, 1, mostRecent = true, kind = "summary").lastOrNull()
-        val conversation = contextMessages(history, summary, goal)
         val client = OkHttpOpenAiClient(
             baseUrl = baseUrl,
             apiKey = apiKey,
             model = model,
             onRateLimitWait = { delayMs -> startRateLimitCountdown(delayMs) },
         )
+        val context = ConversationContext(db)
+        val budget = historyBudget(keyStore.contextTokens())
+        var summary = context.latest(threadId)
+        if (keyStore.autoCompact()) {
+            try {
+                context.compact(threadId, client, model, budget, automatic = true, currentGoal = goal, previous = summary)?.let {
+                    summary = it
+                    if (activeThreadId.value == threadId) append(ChatUiMessage("system", it.content, contextSummary = true))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // A rejected summary doesn't lose the transcript or block the main request.
+            }
+        }
+        val history = db.getMessages(threadId, limit = 128, mostRecent = true, kind = "text", conversationOnly = true)
+        val conversation = buildConversationContext(history, summary, goal, budget)
         val loop = AgentLoop(
             client = client,
             tools = policyGatedRegistry(threadId, mode, db),
@@ -970,15 +972,4 @@ private class PolicyGatedTool(
         )
         return result
     }
-}
-
-/** Retain the summary and only messages after it; the current goal is sent by AgentLoop. */
-internal fun contextMessages(history: List<TimelineMessage>, summary: TimelineMessage?, goal: String): List<ChatMessage> {
-    val prior = if (history.lastOrNull()?.let { it.role == "user" && it.content == goal } == true) history.dropLast(1) else history
-    val note = summary?.let {
-        ChatMessage("user", "Summary of earlier conversation (context only):\n${SecretScrubber.scrub(it.content).take(8000)}")
-    }
-    return listOfNotNull(note) + prior.filter {
-        it.id > (summary?.id ?: 0) && it.kind == "text" && it.role in setOf("user", "assistant")
-    }.takeLast(16).map { ChatMessage(it.role, SecretScrubber.scrub(it.content).take(2000)) }
 }

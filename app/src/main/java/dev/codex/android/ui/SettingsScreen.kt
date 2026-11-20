@@ -25,6 +25,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -48,12 +49,51 @@ import dev.codex.android.api.ConnectionTestResult
 import dev.codex.android.api.ProviderPreset
 import dev.codex.android.api.ProviderService
 import dev.codex.android.api.endpointKey
+import dev.codex.android.context.MIN_CONTEXT_TOKENS
+import dev.codex.android.context.MAX_CONTEXT_TOKENS
 import dev.codex.android.service.BatteryHelper
 import dev.codex.android.tools.validGitHubRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+@Composable
+private fun ContextSettings(settings: dev.codex.android.data.KeyStore) {
+    var open by remember { mutableStateOf(false) }
+    OutlinedButton(onClick = { open = true }, modifier = Modifier.fillMaxWidth().testTag("settings_context")) {
+        Text("Chat context")
+    }
+    if (open) {
+        var enabled by remember { mutableStateOf(settings.autoCompact()) }
+        var window by remember { mutableStateOf(settings.contextTokens().toString()) }
+        val tokens = window.toIntOrNull()
+        val valid = tokens != null && tokens in MIN_CONTEXT_TOKENS..MAX_CONTEXT_TOKENS
+        AlertDialog(
+            onDismissRequest = { open = false },
+            title = { Text("Chat context") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Summarise older context automatically", modifier = Modifier.weight(1f))
+                        Switch(checked = enabled, onCheckedChange = { enabled = it })
+                    }
+                    OutlinedTextField(window, { window = it.filter(Char::isDigit).take(7) },
+                        label = { Text("Model context window (tokens)") }, singleLine = true, isError = !valid)
+                    Text("Enter your model’s context window ($MIN_CONTEXT_TOKENS–$MAX_CONTEXT_TOKENS tokens). " +
+                        "An extra provider request summarises older messages when the history budget fills. " +
+                        "Recent messages and the original transcript are kept.")
+                }
+            },
+            confirmButton = { TextButton(onClick = {
+                tokens?.let(settings::setContextTokens)
+                settings.setAutoCompact(enabled)
+                open = false
+            }, enabled = valid) { Text("Save") } },
+            dismissButton = { TextButton(onClick = { open = false }) { Text("Cancel") } },
+        )
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -272,6 +312,7 @@ fun SettingsScreen(viewModel: ChatViewModel, onBack: () -> Unit, onOpenHelp: () 
             }
             Spacer(modifier = Modifier.height(16.dp))
             MemorySettings(viewModel.personalMemory)
+            ContextSettings(viewModel.keyStore)
             Spacer(modifier = Modifier.height(16.dp))
             Text("GitHub Actions", style = MaterialTheme.typography.titleMedium)
             Text("Use an existing build repository and a fine-grained token limited to that repository. " +
