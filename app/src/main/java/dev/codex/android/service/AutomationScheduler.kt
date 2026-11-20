@@ -6,8 +6,11 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import androidx.work.await
 import androidx.work.workDataOf
 import dev.codex.android.data.AutomationEntity
+import java.time.Duration
+import java.time.Instant
 import java.util.concurrent.TimeUnit
 
 /**
@@ -15,32 +18,10 @@ import java.util.concurrent.TimeUnit
  * one unique work name per automation. Disabling (or deleting) an
  * automation cancels its work.
  *
- * Trigger model (reused from the reference implementations, behaviour
- * only — no code copied):
- * - OpenCode (MIT): scheduling lives in scheduler plugins
- *   (opencode-scheduler / opencode-tasks) — a cron expression plus
- *   conditions, supervised runs (no overlap), pause/resume, run history.
- *   The Android equivalent of "cron + OS scheduler" is WorkManager
- *   periodic work; the equivalent of "supervised, no overlap" is unique
- *   work (one worker per automation) plus [AgentRuntime]'s one-run-per-
- *   thread guard.
- * - OpenAI Codex scheduled tasks (previously "automations"): instruction
- *   + cadence (daily/hourly/custom recurrence), runs report back to a
- *   Scheduled inbox for review, and runs execute unattended with
- *   approval_policy = "never" (whatever would need approval fails
- *   instead of hanging). That is exactly what [AutomationWorker] does:
- *   the run lands in the Review Inbox as needs_review, and its approval
- *   gate auto-denies instead of suspending.
- *
- * Event triggers (Gmail/Slack/GitHub events in Codex web tasks) are NOT
- * implemented: no such event source exists on the phone. The conditions
- * an automation can express are the WorkManager constraints below
- * (Wi-Fi/unmetered, charging).
- *
- * Drop-in §7 adaptation: this file holds only the scheduler (the
- * drop-in bundled the worker class in the same listing); the pure
- * helpers [workName] and [coerceIntervalMinutes] are public so plain
- * JVM unit tests can cover them without WorkManager.
+ * Interval schedules run on each eligible tick. Calendar schedules prefer the
+ * first due time, then check the wall clock in their saved zone on each tick.
+ * The worker claims one due slot in SQLite before invoking the agent. The OS
+ * can delay either kind of work while the device or its constraints are unavailable.
  */
 object AutomationScheduler {
 
@@ -66,10 +47,10 @@ object AutomationScheduler {
      * [ExistingPeriodicWorkPolicy.UPDATE] replaces the previous request
      * (new interval/constraints) without duplicating runs.
      */
-    fun sync(context: Context, automation: AutomationEntity) {
+    suspend fun sync(context: Context, automation: AutomationEntity) {
         val wm = WorkManager.getInstance(context.applicationContext)
         if (!automation.enabled) {
-            wm.cancelUniqueWork(workName(automation.id))
+            wm.cancelUniqueWork(workName(automation.id)).await()
             return
         }
         val constraints = Constraints.Builder()
@@ -80,9 +61,13 @@ object AutomationScheduler {
             .build()
 
         // Android WorkManager enforces a 15-minute minimum periodic interval.
-        val interval = coerceIntervalMinutes(automation.intervalMinutes)
-        val req = PeriodicWorkRequestBuilder<AutomationWorker>(interval, TimeUnit.MINUTES)
-            .setConstraints(constraints)
+        val interval = if (automation.calendar == null) coerceIntervalMinutes(automation.intervalMinutes) else MIN_INTERVAL_MINUTES
+        val builder = PeriodicWorkRequestBuilder<AutomationWorker>(interval, TimeUnit.MINUTES)
+        automation.calendar?.let { calendar ->
+            val now = Instant.now()
+            builder.setInitialDelay(Duration.between(now, calendar.nextAfter(now)).toMillis(), TimeUnit.MILLISECONDS)
+        }
+        val req = builder.setConstraints(constraints)
             .setInputData(workDataOf(AutomationWorker.KEY_AUTOMATION_ID to automation.id))
             .build()
 
@@ -90,12 +75,12 @@ object AutomationScheduler {
             workName(automation.id),
             ExistingPeriodicWorkPolicy.UPDATE,
             req,
-        )
+        ).await()
     }
 
     /** Cancels the periodic work for one automation, if any is enqueued. */
-    fun cancel(context: Context, automationId: String) {
+    suspend fun cancel(context: Context, automationId: String) {
         WorkManager.getInstance(context.applicationContext)
-            .cancelUniqueWork(workName(automationId))
+            .cancelUniqueWork(workName(automationId)).await()
     }
 }

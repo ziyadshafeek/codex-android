@@ -3,6 +3,7 @@ package dev.codex.android.service
 import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import java.time.Instant
 import dev.codex.android.memory.PersonalMemory
 import dev.codex.android.agent.AgentEvent
 import dev.codex.android.agent.AgentLoop
@@ -111,17 +112,17 @@ class AutomationWorker(
         val db = CodexDatabase.getInstance(applicationContext)
         val automation = db.getAutomation(id) ?: return Result.success()
         if (!automation.enabled) return Result.success()
+        automation.calendar?.let { schedule ->
+            val slot = schedule.dueAt(Instant.now(), Instant.ofEpochMilli(automation.scheduleStartedAt),
+                automation.scheduleClaimedAt?.let(Instant::ofEpochMilli)) ?: return Result.success()
+            if (!db.claimCalendarSlot(automation, slot.toEpochMilli())) return Result.success()
+        }
 
         val keyStore = KeyStore(applicationContext)
         val baseUrl = keyStore.getBaseUrl()
         val apiKey = keyStore.getApiKey()
         if (!keyStore.hasKey() || baseUrl.isBlank() || apiKey.isNullOrBlank()) {
-            db.upsertAutomation(
-                automation.copy(
-                    lastRunAt = System.currentTimeMillis(),
-                    lastStatus = "skipped_no_key",
-                )
-            )
+            db.finishAutomation(automation.id, "skipped_no_key")
             return Result.success()
         }
 
@@ -146,12 +147,7 @@ class AutomationWorker(
             // A run is already active for this thread (unique periodic
             // work normally prevents this; a manual run could collide).
             // Skip this tick rather than double-running.
-            db.upsertAutomation(
-                automation.copy(
-                    lastRunAt = System.currentTimeMillis(),
-                    lastStatus = "skipped_already_running",
-                )
-            )
+            db.finishAutomation(automation.id, "skipped_already_running")
             return Result.success()
         }
 
@@ -170,13 +166,8 @@ class AutomationWorker(
         } catch (e: TimeoutCancellationException) {
             AgentRuntime.stop(thread.id)
             db.updateThreadState(thread.id, status = "error", unread = true)
-            db.upsertAutomation(
-                automation.copy(
-                    lastRunAt = System.currentTimeMillis(),
-                    lastStatus = "error:timeout",
-                )
-            )
-            Result.retry()
+            db.finishAutomation(automation.id, "error:timeout")
+            if (automation.calendar == null) Result.retry() else Result.success()
         } catch (e: CancellationException) {
             // WorkManager stopped the worker: the runtime owns its own
             // scope, so stop the run too — otherwise it would keep
@@ -264,21 +255,11 @@ class AutomationWorker(
         val modelFailed = lastAssistantMessageFailed(db, threadId)
         return if (thread?.status == "error" || modelFailed) {
             db.updateThreadState(threadId, status = "error", unread = true)
-            db.upsertAutomation(
-                automation.copy(
-                    lastRunAt = System.currentTimeMillis(),
-                    lastStatus = if (thread?.status == "error") "error:run_failed" else "error:model",
-                )
-            )
-            Result.retry()
+            db.finishAutomation(automation.id, if (thread?.status == "error") "error:run_failed" else "error:model")
+            if (automation.calendar == null) Result.retry() else Result.success()
         } else {
             db.updateThreadState(threadId, status = "needs_review", unread = true)
-            db.upsertAutomation(
-                automation.copy(
-                    lastRunAt = System.currentTimeMillis(),
-                    lastStatus = "ok",
-                )
-            )
+            db.finishAutomation(automation.id, "ok")
             Result.success()
         }
     }

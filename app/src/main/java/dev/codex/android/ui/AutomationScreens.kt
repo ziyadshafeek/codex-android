@@ -12,7 +12,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -39,22 +43,17 @@ import androidx.compose.ui.unit.dp
 import dev.codex.android.data.AutomationEntity
 import dev.codex.android.data.CodexDatabase
 import dev.codex.android.service.AutomationScheduler
+import dev.codex.android.service.CalendarSchedule
+import java.time.DayOfWeek
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.TextStyle
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
 import kotlinx.coroutines.launch
-
-/**
- * Automations UI (master plan Subsystem 8): a creator form plus the
- * automation list with enable/disable toggles.
- *
- * Standalone composables — NOT wired into navigation. Both take the
- * [CodexDatabase] and drive [AutomationScheduler] directly: saving or
- * toggling an automation writes the row with
- * [CodexDatabase.upsertAutomation] and (re-)schedules or cancels its
- * WorkManager periodic work in the same step.
- */
 
 /** Interval presets offered in the creator, in minutes. */
 private val INTERVAL_PRESETS_MINUTES = listOf(15L to "15m", 60L to "1h", 360L to "6h", 1440L to "24h")
@@ -71,6 +70,9 @@ fun AutomationListScreen(
     val context = LocalContext.current
     var automations by remember { mutableStateOf<List<AutomationEntity>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
+    var mutation by remember { mutableStateOf(false) }
+    var status by remember { mutableStateOf<String?>(null) }
+    var delete by remember { mutableStateOf<AutomationEntity?>(null) }
     // Bumped after every mutation so the list reloads from the DB.
     var refreshKey by remember { mutableStateOf(0) }
     val scope = rememberCoroutineScope()
@@ -82,6 +84,25 @@ fun AutomationListScreen(
     LaunchedEffect(database, refreshKey) {
         automations = runCatching { database.listAutomations() }.getOrDefault(emptyList())
         loading = false
+    }
+
+    delete?.let { item ->
+        AlertDialog(onDismissRequest = { delete = null }, title = { Text("Delete automation?") },
+            text = { Text("Stop future runs of ${item.name}. Existing results stay in the Review Inbox.") },
+            confirmButton = { TextButton(onClick = {
+                delete = null
+                mutation = true
+                scope.launch {
+                    runCatching {
+                        database.deleteAutomation(item.id)
+                        AutomationScheduler.cancel(context, item.id)
+                    }.onFailure { status = "Could not finish removing the automation." }
+                    mutation = false
+                    refreshKey++
+                }
+            }) { Text("Delete automation") } },
+            dismissButton = { TextButton(onClick = { delete = null }) { Text("Cancel") } },
+        )
     }
 
     Scaffold(
@@ -135,6 +156,7 @@ fun AutomationListScreen(
                     .padding(horizontal = 12.dp)
                     .testTag("automation_list")
             ) {
+                status?.let { text -> item { Text(text, color = MaterialTheme.colorScheme.error) } }
                 items(automations, key = { it.id }) { automation ->
                     Card(
                         modifier = Modifier
@@ -160,15 +182,20 @@ fun AutomationListScreen(
                                 }
                                 Switch(
                                     checked = automation.enabled,
+                                    enabled = !mutation,
                                     onCheckedChange = { checked ->
+                                        mutation = true
+                                        status = null
                                         scope.launch {
-                                            val updated = automation.copy(enabled = checked)
-                                            runCatching { database.upsertAutomation(updated) }
-                                            if (checked) {
+                                            runCatching {
+                                                database.setAutomationEnabled(automation.id, checked)
+                                                val updated = database.getAutomation(automation.id) ?: error("Automation was deleted")
                                                 AutomationScheduler.sync(context, updated)
-                                            } else {
-                                                AutomationScheduler.cancel(context, updated.id)
+                                            }.onFailure {
+                                                if (checked) database.setAutomationEnabled(automation.id, false)
+                                                status = "Could not update the schedule."
                                             }
+                                            mutation = false
                                             refreshKey++
                                         }
                                     },
@@ -178,13 +205,24 @@ fun AutomationListScreen(
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 text = buildString {
-                                    append("Every ${automation.intervalMinutes} min")
+                                    val calendar = automation.calendar
+                                    if (calendar == null) append("Every ${automation.intervalMinutes} min")
+                                    else {
+                                        val day = calendar.weekday?.getDisplayName(TextStyle.FULL, Locale.getDefault())
+                                        append(if (day == null) "Daily" else "Every $day")
+                                        append(" at ${calendar.time} · ${calendar.zone.id}")
+                                    }
                                     if (automation.requireWifi) append(" · Wi-Fi only")
                                     if (automation.requireCharging) append(" · Charging")
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            automation.calendar?.takeIf { automation.enabled }?.let { calendar ->
+                                val next = calendar.nextAfter(Instant.now()).atZone(calendar.zone)
+                                Text("Next due: ${DateTimeFormatter.ofPattern("EEE, MMM d · HH:mm", Locale.getDefault()).format(next)}",
+                                    style = MaterialTheme.typography.bodySmall)
+                            }
                             Text(
                                 text = if (automation.lastRunAt != null) {
                                     "Last run: ${dateFormat.format(Date(automation.lastRunAt))}" +
@@ -195,6 +233,7 @@ fun AutomationListScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            TextButton(onClick = { delete = automation }, enabled = !mutation) { Text("Delete") }
                         }
                     }
                 }
@@ -215,6 +254,11 @@ fun AutomationCreatorScreen(
     var name by remember { mutableStateOf("") }
     var prompt by remember { mutableStateOf("") }
     var intervalText by remember { mutableStateOf("60") }
+    var calendarMode by remember { mutableStateOf(false) }
+    var time by remember { mutableStateOf("09:00") }
+    var zone by remember { mutableStateOf(ZoneId.systemDefault().id) }
+    var weekday by remember { mutableStateOf<DayOfWeek?>(null) }
+    var dayMenu by remember { mutableStateOf(false) }
     var requireWifi by remember { mutableStateOf(false) }
     var requireCharging by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -263,27 +307,50 @@ fun AutomationCreatorScreen(
                     .testTag("automation_prompt")
             )
             Spacer(modifier = Modifier.height(12.dp))
-            OutlinedTextField(
-                value = intervalText,
-                onValueChange = { intervalText = it.filter { ch -> ch.isDigit() } },
-                label = { Text("Interval (minutes)") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("automation_interval")
-            )
-            Text(
-                text = "WorkManager enforces a minimum of 15 minutes — " +
-                    "shorter intervals are raised to 15.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                INTERVAL_PRESETS_MINUTES.forEach { (minutes, label) ->
-                    TextButton(onClick = { intervalText = minutes.toString() }) {
-                        Text(label)
+                Text("Use a calendar schedule", modifier = Modifier.weight(1f))
+                Switch(checked = calendarMode, onCheckedChange = { calendarMode = it }, modifier = Modifier.testTag("automation_calendar"))
+            }
+            if (calendarMode) {
+                OutlinedButton(onClick = { dayMenu = true }) {
+                    Text(weekday?.getDisplayName(TextStyle.FULL, Locale.getDefault()) ?: "Every day")
+                }
+                DropdownMenu(expanded = dayMenu, onDismissRequest = { dayMenu = false }) {
+                    DropdownMenuItem(text = { Text("Every day") }, onClick = { weekday = null; dayMenu = false })
+                    DayOfWeek.values().forEach { day ->
+                        DropdownMenuItem(text = { Text(day.getDisplayName(TextStyle.FULL, Locale.getDefault())) },
+                            onClick = { weekday = day; dayMenu = false })
+                    }
+                }
+                OutlinedTextField(time, { time = it.take(5) }, label = { Text("Local time (HH:mm)") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth().testTag("automation_time"))
+                OutlinedTextField(zone, { zone = it.take(100) }, label = { Text("Time zone (e.g. Asia/Kolkata)") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth().testTag("automation_zone"))
+                Text("The phone may run the task late. Missed runs more than six hours old are skipped.",
+                    style = MaterialTheme.typography.bodySmall)
+            } else {
+                OutlinedTextField(
+                    value = intervalText,
+                    onValueChange = { intervalText = it.filter { ch -> ch.isDigit() } },
+                    label = { Text("Interval (minutes)") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("automation_interval")
+                )
+                Text(
+                    text = "WorkManager enforces a minimum of 15 minutes — " +
+                        "shorter intervals are raised to 15.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    INTERVAL_PRESETS_MINUTES.forEach { (minutes, label) ->
+                        TextButton(onClick = { intervalText = minutes.toString() }) {
+                            Text(label)
+                        }
                     }
                 }
             }
@@ -316,11 +383,13 @@ fun AutomationCreatorScreen(
                     val trimmedName = name.trim()
                     val trimmedPrompt = prompt.trim()
                     val interval = intervalText.toLongOrNull()
+                    val calendar = if (calendarMode) CalendarSchedule.parse(time, zone, weekday) else null
                     when {
                         trimmedName.isBlank() -> error = "Give the automation a name."
                         trimmedPrompt.isBlank() -> error = "Write what the automation should do."
-                        interval == null || interval <= 0 ->
-                            error = "Interval must be a number of minutes."
+                        calendarMode && calendar == null -> error = "Enter a valid 24-hour time and a time zone such as Asia/Kolkata."
+                        !calendarMode && (interval == null || interval <= 0 || interval > 43_200) ->
+                            error = "Use an interval of up to 43,200 minutes (30 days)."
                         else -> {
                             error = null
                             saving = true
@@ -332,12 +401,15 @@ fun AutomationCreatorScreen(
                                 // Coerced to the 15-minute platform
                                 // minimum here so the stored value is the
                                 // value that actually runs.
-                                intervalMinutes = AutomationScheduler.coerceIntervalMinutes(interval),
+                                intervalMinutes = if (calendar != null) AutomationScheduler.MIN_INTERVAL_MINUTES
+                                    else AutomationScheduler.coerceIntervalMinutes(requireNotNull(interval)),
                                 requireWifi = requireWifi,
                                 requireCharging = requireCharging,
                                 enabled = true,
                                 lastRunAt = null,
                                 lastStatus = null,
+                                calendar = calendar,
+                                scheduleStartedAt = System.currentTimeMillis(),
                             )
                             scope.launch {
                                 runCatching {
@@ -346,7 +418,8 @@ fun AutomationCreatorScreen(
                                 }
                                     .onSuccess { onSaved(automation) }
                                     .onFailure {
-                                        error = "Could not save: ${it.message}"
+                                        database.deleteAutomation(automation.id)
+                                        error = "Could not save or schedule the automation."
                                     }
                                 saving = false
                             }

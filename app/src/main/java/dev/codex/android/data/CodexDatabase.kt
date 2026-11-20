@@ -2,8 +2,11 @@ package dev.codex.android.data
 
 import android.content.ContentValues
 import android.content.Context
+import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import dev.codex.android.service.CalendarSchedule
+import java.time.DayOfWeek
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.UUID
@@ -47,6 +50,9 @@ data class AutomationEntity(
     val enabled: Boolean,
     val lastRunAt: Long?,
     val lastStatus: String?,
+    val calendar: CalendarSchedule? = null,
+    val scheduleStartedAt: Long = 0,
+    val scheduleClaimedAt: Long? = null,
 )
 
 data class McpServerEntity(
@@ -111,7 +117,7 @@ class CodexDatabase(context: Context) :
 
     companion object {
         const val DATABASE_NAME = "codex.db"
-        const val DATABASE_VERSION = 3
+        const val DATABASE_VERSION = 4
 
         const val TABLE_MESSAGES = "messages"
         const val TABLE_FACTS = "facts"
@@ -215,7 +221,12 @@ class CodexDatabase(context: Context) :
                 require_charging INTEGER NOT NULL DEFAULT 0,
                 enabled INTEGER NOT NULL DEFAULT 1,
                 last_run_at INTEGER,
-                last_status TEXT
+                last_status TEXT,
+                schedule_time TEXT,
+                schedule_zone TEXT,
+                schedule_weekday INTEGER,
+                schedule_started_at INTEGER NOT NULL DEFAULT 0,
+                schedule_claimed_at INTEGER
             )
             """.trimIndent()
         )
@@ -353,6 +364,13 @@ class CodexDatabase(context: Context) :
                 )
                 """.trimIndent()
             )
+        }
+        if (oldVersion < 4) {
+            db.execSQL("ALTER TABLE automations ADD COLUMN schedule_time TEXT")
+            db.execSQL("ALTER TABLE automations ADD COLUMN schedule_zone TEXT")
+            db.execSQL("ALTER TABLE automations ADD COLUMN schedule_weekday INTEGER")
+            db.execSQL("ALTER TABLE automations ADD COLUMN schedule_started_at INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE automations ADD COLUMN schedule_claimed_at INTEGER")
         }
     }
 
@@ -701,63 +719,71 @@ class CodexDatabase(context: Context) :
             put("require_charging", if (a.requireCharging) 1 else 0)
             put("enabled", if (a.enabled) 1 else 0)
             if (a.lastRunAt != null) put("last_run_at", a.lastRunAt) else putNull("last_run_at")
-            if (a.lastStatus != null) put("last_status", a.lastStatus) else putNull("last_status")
+            put("last_status", a.lastStatus)
+            put("schedule_time", a.calendar?.time?.toString())
+            put("schedule_zone", a.calendar?.zone?.id)
+            put("schedule_weekday", a.calendar?.weekday?.value)
+            put("schedule_started_at", a.scheduleStartedAt)
+            put("schedule_claimed_at", a.scheduleClaimedAt)
         }
-        writableDatabase.insertWithOnConflict("automations", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+        val row = writableDatabase.insertWithOnConflict(TABLE_AUTOMATIONS, null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+        check(row != -1L) { "Could not save the automation" }
+    }
+
+    /** Do not overwrite schedule settings when a concurrent worker finishes. */
+    suspend fun setAutomationEnabled(id: String, enabled: Boolean) = withContext(Dispatchers.IO) {
+        val values = ContentValues().apply {
+            put("enabled", if (enabled) 1 else 0)
+            if (enabled) put("schedule_started_at", System.currentTimeMillis())
+        }
+        writableDatabase.update(TABLE_AUTOMATIONS, values, "id = ?", arrayOf(id))
+    }
+
+    suspend fun deleteAutomation(id: String) = withContext(Dispatchers.IO) {
+        writableDatabase.delete(TABLE_AUTOMATIONS, "id = ?", arrayOf(id))
+    }
+
+    suspend fun finishAutomation(id: String, status: String) = withContext(Dispatchers.IO) {
+        val values = ContentValues().apply {
+            put("last_run_at", System.currentTimeMillis())
+            put("last_status", status)
+        }
+        writableDatabase.update(TABLE_AUTOMATIONS, values, "id = ?", arrayOf(id))
+    }
+
+    suspend fun claimCalendarSlot(automation: AutomationEntity, slot: Long): Boolean = withContext(Dispatchers.IO) {
+        val values = ContentValues().apply { put("schedule_claimed_at", slot) }
+        val slotText = slot.toString()
+        writableDatabase.update(TABLE_AUTOMATIONS, values,
+            "id = ? AND enabled = 1 AND schedule_started_at = ? AND (schedule_claimed_at IS NULL OR schedule_claimed_at < ?)",
+            arrayOf(automation.id, automation.scheduleStartedAt.toString(), slotText)) == 1
     }
 
     suspend fun getAutomation(id: String): AutomationEntity? = withContext(Dispatchers.IO) {
-        readableDatabase.rawQuery(
-            """
-            SELECT id, name, workspace_id, prompt, interval_minutes, require_wifi,
-                   require_charging, enabled, last_run_at, last_status
-            FROM automations WHERE id = ?
-            """.trimIndent(),
-            arrayOf(id)
-        ).use { c ->
-            if (!c.moveToFirst()) return@withContext null
-            AutomationEntity(
-                id = c.getString(0),
-                name = c.getString(1),
-                workspaceId = c.getString(2),
-                prompt = c.getString(3),
-                intervalMinutes = c.getLong(4),
-                requireWifi = c.getInt(5) != 0,
-                requireCharging = c.getInt(6) != 0,
-                enabled = c.getInt(7) != 0,
-                lastRunAt = if (c.isNull(8)) null else c.getLong(8),
-                lastStatus = if (c.isNull(9)) null else c.getString(9),
-            )
+        readableDatabase.rawQuery("$automationSelect WHERE id = ?", arrayOf(id)).use { c ->
+            if (c.moveToFirst()) c.toAutomation() else null
         }
     }
 
     suspend fun listAutomations(): List<AutomationEntity> = withContext(Dispatchers.IO) {
-        val out = mutableListOf<AutomationEntity>()
-        readableDatabase.rawQuery(
-            """
-            SELECT id, name, workspace_id, prompt, interval_minutes, require_wifi,
-                   require_charging, enabled, last_run_at, last_status
-            FROM automations ORDER BY name ASC
-            """.trimIndent(),
-            null
-        ).use { c ->
-            while (c.moveToNext()) {
-                out += AutomationEntity(
-                    id = c.getString(0),
-                    name = c.getString(1),
-                    workspaceId = c.getString(2),
-                    prompt = c.getString(3),
-                    intervalMinutes = c.getLong(4),
-                    requireWifi = c.getInt(5) != 0,
-                    requireCharging = c.getInt(6) != 0,
-                    enabled = c.getInt(7) != 0,
-                    lastRunAt = if (c.isNull(8)) null else c.getLong(8),
-                    lastStatus = if (c.isNull(9)) null else c.getString(9),
-                )
-            }
+        readableDatabase.rawQuery("$automationSelect ORDER BY name ASC", null).use { c ->
+            buildList { while (c.moveToNext()) add(c.toAutomation()) }
         }
-        out
     }
+
+    private val automationSelect = "SELECT id, name, workspace_id, prompt, interval_minutes, require_wifi, " +
+        "require_charging, enabled, last_run_at, last_status, schedule_time, schedule_zone, " +
+        "schedule_weekday, schedule_started_at, schedule_claimed_at FROM automations"
+
+    private fun Cursor.toAutomation() = AutomationEntity(
+        id = getString(0), name = getString(1), workspaceId = getString(2), prompt = getString(3),
+        intervalMinutes = getLong(4), requireWifi = getInt(5) != 0, requireCharging = getInt(6) != 0,
+        enabled = getInt(7) != 0, lastRunAt = if (isNull(8)) null else getLong(8), lastStatus = getString(9),
+        calendar = if (isNull(10) || isNull(11)) null else CalendarSchedule.parse(
+            getString(10), getString(11), if (isNull(12)) null else DayOfWeek.of(getInt(12)),
+        ),
+        scheduleStartedAt = getLong(13), scheduleClaimedAt = if (isNull(14)) null else getLong(14),
+    )
 
     // --- MCP Servers & Audit Log ---
 
