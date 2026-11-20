@@ -38,7 +38,9 @@
 # 44639680528) — silence those warnings; nothing at runtime needs them.
 -dontwarn com.google.errorprone.annotations.**
 
-# PDFBox-Android checks for this optional JPEG 2000 decoder at runtime and
-# reports a missing image reader if it is absent. We use PDFBox for text,
-# not images (Android PdfRenderer handles the optional page previews).
--dontwarn com.gemalto.jp2.JP2Decoder
+# PDFBox-Android checks for these optional JPEG 2000 classes at runtime
+# and reports a missing image reader/writer if they are absent. We use
+# PDFBox for text, not images (Android PdfRenderer handles the optional
+# page previews). The JP2Encoder entry (JPXFilter.encode) is what R8
+# trips on; the decoder was the first one hit (CI run 44829689204).
+-dontwarn com.gemalto.jp2.**
