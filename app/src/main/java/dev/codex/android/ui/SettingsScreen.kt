@@ -186,10 +186,14 @@ fun SettingsScreen(viewModel: ChatViewModel, onBack: () -> Unit, onOpenHelp: () 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
                     onClick = {
-                        keyStore.clearApiKey()
-                        apiKey = ""
                         resetModels()
-                        viewModel.refreshKeyState()
+                        apiKey = ""
+                        try {
+                            keyStore.clearApiKey()
+                            viewModel.refreshKeyState()
+                        } catch (_: Exception) {
+                            providerStatus = "Could not clear the saved key. Encrypted key storage may be unavailable."
+                        }
                     },
                     modifier = Modifier.testTag("settings_clear_key"),
                 ) { Text("Clear key") }
@@ -229,11 +233,14 @@ fun SettingsScreen(viewModel: ChatViewModel, onBack: () -> Unit, onOpenHelp: () 
                     onDismissRequest = { models = null },
                     title = { Text("Select a model") },
                     text = {
-                        LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
+                        Column {
+                            providerStatus?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                            LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
                             items(available, key = { it }) { id ->
                                 OutlinedButton(onClick = { saveProvider(id) }, modifier = Modifier.fillMaxWidth()) {
                                     Text(id)
                                 }
+                            }
                             }
                         }
                     },

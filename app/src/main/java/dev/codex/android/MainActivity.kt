@@ -10,7 +10,7 @@ import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.foundation.layout.Column
@@ -160,18 +160,23 @@ class MainActivity : ComponentActivity() {
             val linuxDir = File(filesDir, "linux")
             // Prepare the host-side bind before the first shell can open.
             runCatching { CodexCli.writeDaemonEnv(linuxDir, localDaemon.bearerToken) }
-            // Extraction replaces an incomplete rootfs, so install the CLI only
-            // after setup succeeds (including after a retry from Terminal).
-            if (!RootfsBootstrap.ensure(applicationContext)) {
-                RootfsBootstrap.status.first { it == RootfsBootstrap.Status.Ready }
+            // Shell bootstrap must not block the Android-side daemon or workspace.
+            launch {
+                RootfsBootstrap.ensure(applicationContext)
+                RootfsBootstrap.status.collect { status ->
+                    if (status == RootfsBootstrap.Status.Ready) {
+                        runCatching {
+                            CodexCli.installIntoRootfs(
+                                rootfsDir = RootfsBootstrap.manager(applicationContext).rootfsDir(),
+                                linuxDir = linuxDir,
+                                bearerToken = localDaemon.bearerToken,
+                                port = LocalDaemon.DEFAULT_PORT,
+                            )
+                        }
+                    }
+                }
             }
             runCatching {
-                CodexCli.installIntoRootfs(
-                    rootfsDir = RootfsBootstrap.manager(applicationContext).rootfsDir(),
-                    linuxDir = linuxDir,
-                    bearerToken = localDaemon.bearerToken,
-                    port = LocalDaemon.DEFAULT_PORT,
-                )
                 localDaemon.start()
                 mcpHub.listMcpServers()
                 CodexDatabase.getInstance(applicationContext).upsertWorkspace(
