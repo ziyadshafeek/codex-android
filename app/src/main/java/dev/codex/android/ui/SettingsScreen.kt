@@ -57,7 +57,7 @@ import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(viewModel: ChatViewModel, onBack: () -> Unit, onOpenHelp: () -> Unit) {
+fun SettingsScreen(viewModel: ChatViewModel, onBack: () -> Unit, onOpenHelp: () -> Unit, onOpenAutomations: () -> Unit) {
     val keyStore = viewModel.keyStore
     var baseUrl by remember { mutableStateOf(keyStore.getBaseUrl()) }
     var model by remember { mutableStateOf(keyStore.getModel()) }
@@ -256,6 +256,10 @@ fun SettingsScreen(viewModel: ChatViewModel, onBack: () -> Unit, onOpenHelp: () 
                 Text("Help")
             }
             Spacer(modifier = Modifier.height(24.dp))
+            OutlinedButton(onClick = onOpenAutomations, modifier = Modifier.fillMaxWidth().testTag("settings_automations")) {
+                Text("Automations")
+            }
+            Spacer(modifier = Modifier.height(16.dp))
             Text("GitHub Actions", style = MaterialTheme.typography.titleMedium)
             Text("Use an existing build repository and a fine-grained token limited to that repository. " +
                 "Source publishing needs Contents write; manual builds need Actions write. " +

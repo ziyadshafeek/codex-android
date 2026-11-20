@@ -36,6 +36,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import android.view.ViewGroup
+import dev.codex.android.browser.BrowserJs
 import dev.codex.android.browser.ConsoleLevel
 import dev.codex.android.browser.VerificationBrowser
 import kotlinx.coroutines.launch
@@ -63,6 +65,8 @@ fun PreviewScreen(
     val isLoading by browser.isLoading.collectAsState()
     val progress by browser.loadProgress.collectAsState()
     val consoleLogs by browser.consoleLogs.collectAsState()
+    val canGoBack by browser.canGoBack.collectAsState()
+    val pageError by browser.pageError.collectAsState()
 
     val scope = rememberCoroutineScope()
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -70,13 +74,18 @@ fun PreviewScreen(
     // Follows navigation; while the user types the URL does not change,
     // so typing is not interrupted by recomposition.
     var urlText by remember(currentUrl) { mutableStateOf(currentUrl) }
+    var urlError by remember { mutableStateOf<String?>(null) }
     var showConsole by remember { mutableStateOf(false) }
     var screenshotBytes by remember { mutableStateOf<ByteArray?>(null) }
     var showScreenshot by remember { mutableStateOf(false) }
 
     fun navigate() {
-        val url = urlText.trim()
-        if (url.isEmpty()) return
+        val url = BrowserJs.webUrl(urlText)
+        if (url == null) {
+            urlError = "Enter a valid HTTP or HTTPS web address."
+            return
+        }
+        urlError = null
         keyboardController?.hide()
         scope.launch { browser.loadUrl(url) }
     }
@@ -95,9 +104,9 @@ fun PreviewScreen(
         ) {
             OutlinedTextField(
                 value = urlText,
-                onValueChange = { urlText = it },
+                onValueChange = { urlText = it; urlError = null },
                 singleLine = true,
-                placeholder = { Text("https://example.com or localhost:3000") },
+                label = { Text("Web address") },
                 modifier = Modifier
                     .weight(1f)
                     .testTag("preview_url_bar"),
@@ -108,6 +117,14 @@ fun PreviewScreen(
             ) {
                 Text("Go")
             }
+        }
+
+        (urlError ?: pageError)?.let {
+            Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 12.dp))
+        }
+        Row(modifier = Modifier.padding(horizontal = 8.dp)) {
+            TextButton(onClick = { scope.launch { browser.goBack() } }, enabled = canGoBack) { Text("Previous page") }
+            TextButton(onClick = { scope.launch { browser.reload() } }, enabled = currentUrl.isNotBlank()) { Text("Reload") }
         }
 
         // Page title + load progress.
@@ -160,7 +177,9 @@ fun PreviewScreen(
 
         // Live page view: the browser's own WebView, shared with the agent.
         AndroidView(
-            factory = { browser.webView },
+            factory = {
+                browser.webView.also { view -> (view.parent as? ViewGroup)?.removeView(view) }
+            },
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()

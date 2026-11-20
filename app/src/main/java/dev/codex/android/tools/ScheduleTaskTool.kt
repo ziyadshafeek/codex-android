@@ -24,8 +24,7 @@ import kotlinx.serialization.json.putJsonObject
  * [dev.codex.android.scheduler.TaskReceiver] notifies the user and
  * starts the agent service with the task's prompt.
  *
- * Not sensitive: scheduling a reminder is not in the gated list
- * (message / call / setting / money / delete).
+ * Scheduling starts future agent work, so it requires user approval.
  */
 class ScheduleTaskTool(private val context: Context) : Tool {
     override val name: String = "schedule_task"
@@ -55,7 +54,7 @@ class ScheduleTaskTool(private val context: Context) : Tool {
             add(JsonPrimitive("time"))
         }
     }
-    override val sensitive: Boolean = false
+    override val sensitive: Boolean = true
 
     override suspend fun execute(args: JsonObject): ToolResult {
         val title = args["title"]?.jsonPrimitive?.contentOrNull?.trim()

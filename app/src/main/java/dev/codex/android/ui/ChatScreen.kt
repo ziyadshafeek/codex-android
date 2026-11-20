@@ -56,8 +56,9 @@ fun ChatScreen(
     val isRunning by viewModel.isRunning.collectAsState()
     val activeThreadId by viewModel.activeThreadId.collectAsState()
     val hasKey by viewModel.hasKey.collectAsState()
+    val compacting by viewModel.compacting.collectAsState()
     val listState = rememberLazyListState()
-    var text by remember { mutableStateOf("") }
+    var text by remember(activeThreadId) { mutableStateOf("") }
 
     // M8 voice input + M1 Stop/Steer composer controls. The composable
     // calls AgentRuntime directly for stop/steer; the ViewModel-level
@@ -247,6 +248,16 @@ fun ChatScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = { text = ""; viewModel.newChat() }, enabled = !isRunning && !compacting,
+                    modifier = Modifier.testTag("chat_new")) { Text("New chat") }
+                TextButton(onClick = viewModel::compactChat, enabled = activeThreadId != null && !isRunning && !compacting,
+                    modifier = Modifier.testTag("chat_compact")) { Text(if (compacting) "Summarising…" else "Summarise") }
+                val summary = messages.indexOfLast { it.contextSummary }
+                val chars = (messages.getOrNull(summary)?.text?.length ?: 0) + messages.drop(summary + 1)
+                    .filter { it.role in setOf("user", "assistant") && !it.isError }.takeLast(16).sumOf { it.text.length.coerceAtMost(2000) }
+                Text("~${(chars + text.length + 3) / 4} tokens", style = MaterialTheme.typography.labelSmall)
+            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -300,7 +311,7 @@ fun ChatScreen(
                         }
                         text = ""
                     },
-                    enabled = text.isNotBlank() && (!isRunning || activeThreadId != null),
+                    enabled = !compacting && text.isNotBlank() && (!isRunning || activeThreadId != null),
                     modifier = Modifier.padding(start = 8.dp).testTag("chat_send")
                 ) {
                     Text(if (isRunning) "Steer" else "Send")

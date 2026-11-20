@@ -184,8 +184,10 @@ object CommandHandlers {
     // --- /compact ---
 
     private suspend fun handleCompact(ctx: CommandContext, parsed: ParsedCommand): SlashResult {
-        val messages = ctx.db.getMessages(ctx.threadId, limit = 200)
-        val contentMessages = messages.filter { it.kind != "summary" }
+        val previous = ctx.db.getMessages(ctx.threadId, limit = 1, mostRecent = true, kind = "summary").lastOrNull()
+        val contentMessages = ctx.db.getMessages(ctx.threadId, limit = 200, mostRecent = true)
+            .filter { it.id > (previous?.id ?: 0) && it.kind == "text" && it.role in setOf("user", "assistant") }
+        val messages = listOfNotNull(previous) + contentMessages
         if (contentMessages.isEmpty()) {
             return SlashResult("Nothing to compact yet — this thread has no messages.")
         }
@@ -193,7 +195,7 @@ object CommandHandlers {
             ?: return SlashResult(PROVIDER_NEEDED_COMPACT)
         return when (summary) {
             is SummariseResult.Ok -> {
-                val summaryText = summary.text.trim()
+                val summaryText = summary.text.trim().take(8000)
                 if (summaryText.isBlank()) {
                     return SlashResult("Compaction failed: the model returned an empty summary.")
                 }

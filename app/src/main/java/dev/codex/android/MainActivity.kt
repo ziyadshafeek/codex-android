@@ -18,6 +18,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
@@ -55,6 +56,8 @@ import dev.codex.android.server.LocalDaemon
 import dev.codex.android.subagents.SubagentOrchestrator
 import dev.codex.android.terminal.TerminalStateHolder
 import dev.codex.android.ui.ApprovalDialog
+import dev.codex.android.ui.AutomationCreatorScreen
+import dev.codex.android.ui.AutomationListScreen
 import dev.codex.android.ui.ChatScreen
 import dev.codex.android.ui.ChatViewModel
 import dev.codex.android.ui.ComposerMode
@@ -195,6 +198,8 @@ class MainActivity : ComponentActivity() {
                         mutableStateOf(!onboardingPrefs.isComplete())
                     }
                     var showSettings by remember { mutableStateOf(false) }
+                    var showAutomations by remember { mutableStateOf(false) }
+                    var createAutomation by remember { mutableStateOf(false) }
                     var showHistory by remember { mutableStateOf(false) }
                     var showStore by remember { mutableStateOf(false) }
                     var showPreview by remember { mutableStateOf(false) }
@@ -204,6 +209,10 @@ class MainActivity : ComponentActivity() {
                     // created on the main thread and shared by the
                     // Preview tab and the agent's browser tools.
                     val browser = remember { VerificationBrowser(applicationContext) }
+                    DisposableEffect(browser) {
+                        viewModel.attachBrowser(browser)
+                        onDispose { viewModel.attachBrowser(null) }
+                    }
                     // Publish the shared browser for onDestroy teardown.
                     SideEffect { browserRef = browser }
                     // Composition root for the workbench engines (M2/M4/M6):
@@ -320,11 +329,22 @@ class MainActivity : ComponentActivity() {
                                 onBack = { showHelp = false },
                             )
                         }
+                        createAutomation -> AutomationCreatorScreen(
+                            database = database,
+                            onSaved = { createAutomation = false },
+                            onBack = { createAutomation = false },
+                        )
+                        showAutomations -> AutomationListScreen(
+                            database = database,
+                            onCreateClick = { createAutomation = true },
+                            onBack = { showAutomations = false },
+                        )
                         showSettings -> {
                             SettingsScreen(
                                 viewModel = viewModel,
                                 onBack = { showSettings = false },
                                 onOpenHelp = { showHelp = true },
+                                onOpenAutomations = { showAutomations = true },
                             )
                         }
                         showWorkbench -> {
