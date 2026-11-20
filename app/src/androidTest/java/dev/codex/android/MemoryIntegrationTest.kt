@@ -75,6 +75,7 @@ class MemoryIntegrationTest {
                 waitForText("Garden reply one")
                 waitForReady()
                 compose.onNodeWithTag("chat_new").performClick()
+                compose.onNodeWithText("Start without saving").performClick()
                 compose.onNodeWithText("Settings").performClick()
                 compose.onNodeWithTag("settings_memory").performScrollTo().performClick()
                 compose.onNodeWithTag("memory_note_garden-test").assertIsDisplayed()

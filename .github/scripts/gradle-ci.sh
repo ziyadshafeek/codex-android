@@ -6,7 +6,7 @@ trap 'rm -f "$log"' EXIT
 ./gradlew "$@" --no-daemon --console=plain 2>&1 | tee "$log"
 status=${PIPESTATUS[0]}
 if (( status != 0 )); then
-  grep -E '^e: file:| > .* FAILED$|^.*[[:space:]]FAILED[[:space:]]*$|^Execution failed for task|^Caused by:' "$log" | head -25 | while IFS= read -r line; do
+  grep -E '^e: file:|^ERROR:.*R8|^Missing class|^AGPBI:.*"kind":"error"| > .* FAILED$|^.*[[:space:]]FAILED[[:space:]]*$|^Execution failed for task|^Caused by:' "$log" | head -25 | while IFS= read -r line; do
     printf '::error::%s\n' "${line//%/%25}"
   done
   if [[ " $* " == *" connectedDebugAndroidTest "* ]]; then
