@@ -97,7 +97,8 @@ fun DesktopWorkstation(
     terminalStateHolder: TerminalStateHolder = remember { TerminalStateHolder() },
     snapshotEngine: SnapshotEngine? = null,
     onSelectThread: (String) -> Unit = {},
-    onSendPrompt: (prompt: String, mode: ComposerMode, attachedFiles: List<String>) -> Unit = { _, _, _ -> },
+    onSendPrompt: (prompt: String, mode: ComposerMode, attachedFiles: List<String>) -> Boolean = { _, _, _ -> false },
+    attachmentControls: (@Composable (enabled: Boolean) -> Unit)? = null,
     onOpenSettings: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -121,6 +122,7 @@ fun DesktopWorkstation(
             snapshotEngine = snapshotEngine,
             onSelectThread = onSelectThread,
             onSendPrompt = onSendPrompt,
+            attachmentControls = attachmentControls,
             onOpenSettings = onOpenSettings,
             browserTabContent = {
                 if (mode == DesktopLayoutMode.THREE_PANE || (mode == DesktopLayoutMode.TWO_PANE && activePane == 0)) {

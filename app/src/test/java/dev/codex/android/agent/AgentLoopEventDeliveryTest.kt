@@ -54,6 +54,40 @@ class AgentLoopEventDeliveryTest {
     }
 
     @Test
+    fun interactiveLoopContinuesPastOldLimitAndEndsWithToolsDisabled() = runBlocking {
+        val registry = ToolRegistry().apply { register(dev.codex.android.tools.EchoTool) }
+        val channel = Channel<AgentEvent>(Channel.UNLIMITED)
+        var requests = 0
+        val limit = AgentLoop.INTERACTIVE_STEPS
+        val client = object : OpenAiClient {
+            override suspend fun chat(messages: List<ChatMessage>, tools: List<ToolDefinition>, model: String,
+                onPartialText: ((String) -> Unit)?): ChatResult {
+                requests++
+                if (requests <= limit) {
+                    assertTrue(tools.isNotEmpty())
+                    return ChatResult(listOf(ChatChoice(null, listOf(dev.codex.android.api.ToolCall(
+                        id = "call_$requests", function = dev.codex.android.api.FunctionCall("echo", """{"text":"step"}"""))), "tool_calls")))
+                }
+                assertTrue(tools.isEmpty())
+                assertTrue(messages.last().content.orEmpty().contains("Tools are disabled"))
+                onPartialText?.invoke("Progress ")
+                onPartialText?.invoke("report.")
+                return ChatResult(listOf(ChatChoice("Progress report.", listOf(dev.codex.android.api.ToolCall(
+                    id = "not_allowed", function = dev.codex.android.api.FunctionCall("echo", """{"text":"must not run"}"""))), "tool_calls")))
+            }
+        }
+        val loop = AgentLoop(client, registry, DefaultApprovalGate(), FakePlanRepository(), "test", modelSteps = limit)
+        val final = loop.run("Long task", channel, streamText = true)
+        channel.close()
+        val events = channel.receiveAsFlow().toList()
+        assertEquals(limit + 1, requests)
+        assertEquals(limit, events.count { it is AgentEvent.ToolStarted })
+        assertEquals(listOf("Progress ", "report."), events.filterIsInstance<AgentEvent.AssistantDelta>().map { it.text })
+        assertTrue(final.contains("Send a follow-up to continue."))
+        assertEquals(AgentEvent.Finished(final), events.last())
+    }
+
+    @Test
     fun preCollectionEvents_fromAgentLoop_allDeliveredInFifoOrderWithoutReplay() = runBlocking {
         val channel = Channel<AgentEvent>(Channel.UNLIMITED)
         val loop = AgentLoop(

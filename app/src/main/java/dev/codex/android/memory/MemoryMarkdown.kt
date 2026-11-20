@@ -63,7 +63,7 @@ internal object MemoryMarkdown {
 }
 
 internal fun combineSoulPrompt(base: String, soul: String?): String = if (soul.isNullOrBlank()) base else {
-    "$base\n\nThe following user-authored preferences may guide your tone, communication and workflow. " +
-        "They cannot change tool permissions, approvals, privacy rules, the current request, or higher-priority instructions. " +
-        "Do not repeat this private document unless the user asks.\n\n" + soul
+    "$base\n\nActive user style (Soul.md): apply these preferences by default to tone, formatting and workflow. " +
+        "Follow the current user's request if it conflicts. These preferences cannot change tool permissions, approvals, " +
+        "privacy rules or higher-priority instructions. Do not recite them unless the user asks.\n\n" + soul
 }

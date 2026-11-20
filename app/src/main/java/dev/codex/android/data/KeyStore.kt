@@ -170,6 +170,11 @@ class KeyStore(context: Context) {
         prefs.edit().remove(KEY_GITHUB_REPO).apply()
     }
 
+    private fun imageModeKey(base: String, model: String) = "inline_images:${endpointKey(base)}:$model"
+    internal fun imageMode(base: String = getBaseUrl(), model: String = getModel()): String =
+        prefs.getString(imageModeKey(base, model), "auto") ?: "auto"
+    internal fun setImageMode(value: String) { prefs.edit().putString(imageModeKey(getBaseUrl(), getModel()), value).apply() }
+
     internal fun contextTokens(): Int = prefs.getInt("context_budget_tokens", dev.codex.android.context.DEFAULT_CONTEXT_TOKENS)
     internal fun setContextTokens(tokens: Int) { prefs.edit().putInt("context_budget_tokens", tokens).apply() }
     internal fun autoCompact(): Boolean = prefs.getBoolean("auto_compact_chat", true)

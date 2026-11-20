@@ -96,13 +96,19 @@ class OkHttpOpenAiClient(
         // Blocking OkHttp execute() + stream reads: confine to the IO
         // dispatcher — the agent runtime drives chat() from Default.
         return withContext(Dispatchers.IO) {
+            // A retry may replay the same prefix. Once it is visible, end the failed
+            // reply instead of joining text from two different attempts.
+            var published = false
             withRetry(
                 policy = retryPolicy,
+                isRetryable = { !published && (it is CodexError.Network || it is CodexError.RateLimit || it is CodexError.Timeout) },
                 onRetryWait = { delayMs, error ->
                     if (error is CodexError.RateLimit) onRateLimitWait?.invoke(delayMs)
                 },
             ) {
-                chatOnce(messages, tools, effectiveModel, onPartialText)
+                chatOnce(messages, tools, effectiveModel, onPartialText?.let { emit -> { delta: String ->
+                    if (delta.isNotEmpty()) { published = true; emit(delta) }
+                } })
             }
         }
     }
@@ -131,6 +137,9 @@ class OkHttpOpenAiClient(
         }
         response.use { resp ->
             if (!resp.isSuccessful) {
+                if (resp.code in setOf(400, 413, 415, 422) && messages.any { it.imageUrls.isNotEmpty() }) {
+                    throw CodexError.Unknown("The provider rejected the image or PDF (HTTP ${resp.code}). Use a vision-capable model or attach text instead.")
+                }
                 throw mapHttpError(resp.code, resp.header("Retry-After"), resp.body?.string())
             }
             val contentType = resp.header("Content-Type") ?: ""
@@ -150,10 +159,7 @@ class OkHttpOpenAiClient(
     ): String {
         val root = buildJsonObject {
             put("model", model)
-            put("messages", CodexJson.encodeToJsonElement(
-                kotlinx.serialization.builtins.ListSerializer(ChatMessage.serializer()),
-                messages,
-            ))
+            put("messages", chatMessagesWire(messages))
             if (tools.isNotEmpty()) {
                 put("tools", CodexJson.encodeToJsonElement(
                     kotlinx.serialization.builtins.ListSerializer(ToolDefinition.serializer()),

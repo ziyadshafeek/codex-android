@@ -535,6 +535,7 @@ class CodexDatabase(context: Context) :
         kind: String? = null,
         afterId: Long = 0,
         conversationOnly: Boolean = false,
+        visibleOnly: Boolean = false,
     ): List<TimelineMessage> =
         withContext(Dispatchers.IO) {
             val result = mutableListOf<TimelineMessage>()
@@ -544,6 +545,7 @@ class CodexDatabase(context: Context) :
                 FROM messages
                 WHERE thread_id = ? AND id > ? ${if (kind != null) "AND kind = ?" else ""}
                   ${if (conversationOnly) "AND role IN ('user', 'assistant')" else ""}
+                  ${if (visibleOnly) "AND kind NOT IN ('tool_call','tool_result','intermediate','approval','attachment')" else ""}
                 ORDER BY id ${if (mostRecent) "DESC" else "ASC"}
                 LIMIT ?
                 """.trimIndent(),

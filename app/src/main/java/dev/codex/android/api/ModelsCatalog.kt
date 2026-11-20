@@ -29,6 +29,7 @@ data class ModelInfo(
     val inputPricePerMillionUsd: Double?,
     val outputPricePerMillionUsd: Double?,
     val supportsTools: Boolean,
+    val inputModalities: Set<String> = emptySet(),
 )
 
 /**
@@ -112,6 +113,13 @@ class ModelsCatalog internal constructor(
      *     to the bundled offline snapshot (`models-snapshot.json`) on
      *     [Dispatchers.IO] and returns `false`.
      */
+    internal suspend fun loadOffline() = withContext(Dispatchers.IO) {
+        if (snapshot.all.isEmpty()) {
+            val loaded = readCachedModels() ?: runCatching { snapshotLoader()?.let(::parseCatalog) }.getOrNull()
+            if (!loaded.isNullOrEmpty() && snapshot.all.isEmpty()) snapshot = CatalogIndex.from(loaded)
+        }
+    }
+
     suspend fun refresh(): Boolean = withContext(Dispatchers.IO) {
         val now = clockMs()
         val meta = readMeta()
@@ -273,6 +281,7 @@ class ModelsCatalog internal constructor(
                     inputPricePerMillionUsd = modelDto.cost?.input,
                     outputPricePerMillionUsd = modelDto.cost?.output,
                     supportsTools = modelDto.toolCall,
+                    inputModalities = modelDto.modalities?.input.orEmpty().toSet(),
                 )
             }
         }
@@ -300,7 +309,11 @@ class ModelsCatalog internal constructor(
         val toolCall: Boolean = false,
         val cost: CostDto? = null,
         val limit: LimitDto? = null,
+        val modalities: ModalitiesDto? = null,
     )
+
+    @Serializable
+    private data class ModalitiesDto(val input: List<String> = emptyList())
 
     @Serializable
     private data class CostDto(

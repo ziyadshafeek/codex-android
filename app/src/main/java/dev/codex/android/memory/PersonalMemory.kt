@@ -71,6 +71,11 @@ class PersonalMemory(context: Context) {
         if (!isRecallEnabled()) return null
         return memoryContext(goal, list())
     }
+
+    internal suspend fun search(query: String): String? {
+        if (!isRecallEnabled()) return null
+        return memoryContext(query, list(), includeStanding = false)
+    }
 }
 
 internal const val MAX_NOTE_LENGTH = 400
@@ -78,7 +83,11 @@ private val tokenPattern = Regex("[\\p{L}\\p{N}]{2,}")
 private val stopWords = setOf("and", "can", "could", "do", "does", "for", "have", "how", "in", "is", "it", "me", "my", "of", "on", "please", "the", "to", "use", "what", "with", "would", "you", "about", "that", "this", "will", "which", "should", "know", "remember", "prefer", "preference", "preferences", "note")
 private val credentialLabel = Regex("(?i)\\b(?:password|passphrase|api[_ -]?key|access[_ -]?token|private[_ -]?key|recovery phrase|seed phrase|secret key)\\b")
 private fun words(text: String): Set<String> = tokenPattern.findAll(text.take(4000).lowercase(Locale.ROOT))
-    .map { it.value }.filterNot { it in stopWords }.toSet()
+    .map { it.value }.filterNot { it in stopWords }.flatMap { token ->
+        if (token.length > 4 && token.endsWith("s") && !token.endsWith("ss")) sequenceOf(token, token.dropLast(1))
+        else sequenceOf(token)
+    }.toSet()
+private val broadRecall = Regex("(?i)\\b(?:what (?:do you (?:know|remember)|have you saved) about me|what are my (?:saved )?preferences|what (?:have you|did you) remember)\\b")
 internal fun looksSensitive(text: String): Boolean = SecretScrubber.scrub(text) != text || credentialLabel.containsMatchIn(text)
 
 private fun automaticKey(note: String): String {
@@ -90,15 +99,17 @@ private fun automaticKey(note: String): String {
 }
 
 /** Relevant first; a small budget for explicit standing preferences. Never inject raw transcripts. */
-internal fun memoryContext(goal: String, facts: List<Fact>): String? {
+internal fun memoryContext(goal: String, facts: List<Fact>, includeStanding: Boolean = true): String? {
     val query = words(goal)
+    val asksAboutMemory = broadRecall.containsMatchIn(goal)
     val matches = facts.asSequence()
         .filter { it.source == "user" && !looksSensitive(it.key) && !looksSensitive(it.value) }
         .map { fact ->
             val score = (words(fact.key) intersect query).size * 3 + (words(fact.value) intersect query).size
             fact to score
         }
-        .filter { (fact, score) -> score > 0 || fact.key.startsWith("preference-") || fact.key.startsWith("preference.") }
+        .filter { (fact, score) -> score > 0 || asksAboutMemory ||
+            (includeStanding && (fact.key.startsWith("preference-") || fact.key.startsWith("preference."))) }
         .sortedWith(compareByDescending<Pair<Fact, Int>> { it.second }.thenByDescending { it.first.updatedAtMillis })
         .take(4).map { it.first }.toList()
     if (matches.isEmpty()) return null
@@ -116,7 +127,7 @@ internal sealed interface MemoryCommand {
 
 /** Only entire, directly entered composer commands can mutate persistent memory. */
 internal fun parseMemoryCommand(input: String): MemoryCommand? {
-    val text = input.trim()
+    val text = input.trim().replaceFirst(Regex("(?i)^please\\s+(?=remember that )"), "")
     if (text.length < 8) return if (text.equals("/memory", true)) MemoryCommand.ListNotes("") else null
     val command = text.substringBefore(' ').lowercase(Locale.ROOT)
     val argument = text.substringAfter(' ', "").trim()

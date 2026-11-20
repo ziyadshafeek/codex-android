@@ -184,40 +184,22 @@ object CommandHandlers {
     // --- /compact ---
 
     private suspend fun handleCompact(ctx: CommandContext, parsed: ParsedCommand): SlashResult {
-        val previous = ctx.db.getMessages(ctx.threadId, limit = 1, mostRecent = true, kind = "summary").lastOrNull()
-        val contentMessages = ctx.db.getMessages(ctx.threadId, limit = 200, mostRecent = true)
-            .filter { it.id > (previous?.id ?: 0) && it.kind == "text" && it.role in setOf("user", "assistant") }
-        val messages = listOfNotNull(previous) + contentMessages
-        if (contentMessages.isEmpty()) {
-            return SlashResult("Nothing to compact yet — this thread has no messages.")
-        }
-        val summary = summariseOrExplain(ctx, messages)
-            ?: return SlashResult(PROVIDER_NEEDED_COMPACT)
-        return when (summary) {
-            is SummariseResult.Ok -> {
-                val summaryText = summary.text.trim().take(8000)
-                if (summaryText.isBlank()) {
-                    return SlashResult("Compaction failed: the model returned an empty summary.")
+        if (!ctx.keyStore.hasKey() || ctx.keyStore.getBaseUrl().isBlank()) return SlashResult(PROVIDER_NEEDED_COMPACT)
+        val summarise = ctx.summarise ?: return SlashResult(PROVIDER_NEEDED_COMPACT)
+        return try {
+            val summary = dev.codex.android.context.ConversationContext(ctx.db).checkpoint(
+                threadId = ctx.threadId, budget = dev.codex.android.context.historyBudget(ctx.keyStore.contextTokens()),
+            ) { prompt ->
+                when (val result = summarise(prompt)) {
+                    is SummariseResult.Ok -> result.text
+                    is SummariseResult.NotConfigured -> error(PROVIDER_NEEDED_COMPACT)
+                    is SummariseResult.Failed -> error(result.message)
                 }
-                val summaryRowId = ctx.db.appendMessage(
-                    TimelineMessage(
-                        threadId = ctx.threadId,
-                        role = "system",
-                        kind = "summary",
-                        content = summaryText,
-                    ),
-                )
-                markMessagesCompacted(ctx.db, messages, exceptIds = setOf(summaryRowId))
-                SlashResult(
-                    "Compacted ${contentMessages.size} messages into a summary " +
-                        "(${summaryText.length} chars). Older messages are kept, marked compacted.",
-                )
             }
-            is SummariseResult.NotConfigured -> SlashResult(PROVIDER_NEEDED_COMPACT)
-            is SummariseResult.Failed -> SlashResult(
-                "Compaction failed: ${summary.message}",
-            )
-        }
+            if (summary == null) SlashResult("Nothing to compact yet — this thread has no messages.")
+            else SlashResult("Summarised the full retained conversation. Original messages and tools were kept.")
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (e: Exception) { SlashResult("Compaction failed: ${e.message ?: "provider error"}") }
     }
 
     // --- /recap ---

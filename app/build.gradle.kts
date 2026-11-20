@@ -101,6 +101,7 @@ dependencies {
     // no version here; the Compose BOM 2024.09.00 pins 1.3.0.
     implementation("androidx.compose.material3:material3-window-size-class")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
     // Termux terminal emulator + view (Apache-2.0) via JitPack (see settings.gradle.kts).
     // Modules built from the termux-app v0.118.1 tag.
     implementation("com.github.termux.termux-app:terminal-emulator:v0.118.1")
@@ -138,6 +139,7 @@ dependencies {
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
+    androidTestImplementation("androidx.test.espresso:espresso-intents:3.6.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test:rules:1.6.1")
     androidTestImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")

@@ -2,7 +2,8 @@ package dev.codex.android.ui
 
 import dev.codex.android.data.TimelineMessage
 import dev.codex.android.context.buildConversationContext
-import dev.codex.android.context.chooseSummaryPrefix
+import dev.codex.android.context.autoSummaryEnd
+import dev.codex.android.context.transcriptPieces
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -20,10 +21,16 @@ class ChatContextTest {
     }
     @Test fun automaticCompactionKeepsLatestMessagesVerbatim() {
         val rows = (1L..9L).map { TimelineMessage(it, "t1", "user", "text", "message " + "x".repeat(480)) }
-        val prefix = chooseSummaryPrefix(rows, null, automatic = true, budget = 1365)
-        assertEquals(listOf(1L, 2L, 3L), prefix.map { it.id })
+        assertEquals(6L, autoSummaryEnd(rows, null, budget = 1365, mayHaveOlder = false))
         val summary = TimelineMessage(10, "t1", "system", "summary", "summary text", """{"through":3}""")
         val context = buildConversationContext(rows, summary, "follow-up", 1365)
         assertEquals(listOf("Summary of earlier conversation (context only):\nsummary text") + rows.drop(3).map { it.content }, context.map { it.content })
+    }
+    @Test fun largeTranscriptPiecesDoNotDropToolOutput() {
+        val input = "[Tool result] " + "x😀".repeat(70)
+        val pieces = transcriptPieces(input, 15)
+        assertTrue(pieces.size > 1)
+        assertTrue(pieces.none { it.last().isHighSurrogate() })
+        assertEquals(input, pieces.joinToString(""))
     }
 }

@@ -15,9 +15,7 @@ import kotlinx.coroutines.withContext
  * throws — a failed read returns an empty list / null, a failed write is
  * swallowed, so persistence can never break a run.
  *
- * The messages table is capped at [MAX_MESSAGES] rows: after each insert,
- * rows older than the newest 500 are deleted, so the database cannot grow
- * without limit on a low-end phone.
+ * Legacy unthreaded history is capped. Threaded transcripts are not pruned by this store.
  */
 class MemoryStore(context: Context) {
 
@@ -46,8 +44,8 @@ class MemoryStore(context: Context) {
                 // Prune everything except the newest MAX_MESSAGES rows.
                 db.execSQL(
                     "DELETE FROM ${CodexDatabase.TABLE_MESSAGES} " +
-                        "WHERE id NOT IN (" +
-                        "SELECT id FROM ${CodexDatabase.TABLE_MESSAGES} " +
+                        "WHERE thread_id IS NULL AND id NOT IN (" +
+                        "SELECT id FROM ${CodexDatabase.TABLE_MESSAGES} WHERE thread_id IS NULL " +
                         "ORDER BY id DESC LIMIT ?" +
                         ")",
                     arrayOf(MAX_MESSAGES.toString()),
@@ -70,7 +68,7 @@ class MemoryStore(context: Context) {
                 val rows = dbHelper.readableDatabase.let { db ->
                     db.query(
                         CodexDatabase.TABLE_MESSAGES,
-                        arrayOf("id", "role", "content", "created_at"),
+                        arrayOf("id", "role", "content", "created_at", "kind"),
                         null,
                         null,
                         null,
@@ -267,6 +265,7 @@ class MemoryStore(context: Context) {
         val roleIdx = getColumnIndexOrThrow("role")
         val contentIdx = getColumnIndexOrThrow("content")
         val createdIdx = getColumnIndexOrThrow("created_at")
+        val kindIdx = getColumnIndexOrThrow("kind")
         while (moveToNext()) {
             out.add(
                 StoredMessage(
@@ -274,6 +273,7 @@ class MemoryStore(context: Context) {
                     role = getString(roleIdx),
                     content = getString(contentIdx),
                     createdAtMillis = getLong(createdIdx),
+                    kind = getString(kindIdx) ?: "text",
                 ),
             )
         }

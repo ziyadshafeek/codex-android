@@ -4,7 +4,9 @@ import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import java.time.Instant
+import dev.codex.android.memory.MemorySearchTool
 import dev.codex.android.memory.PersonalMemory
+import dev.codex.android.context.transcriptRecorder
 import dev.codex.android.agent.AgentEvent
 import dev.codex.android.agent.AgentLoop
 import dev.codex.android.agent.AgentRuntime
@@ -337,6 +339,7 @@ class AutomationWorker(
             skills = skills,
             recalledMemory = memory::recall,
             soulMarkdown = memory::soulForAgent,
+            transcript = transcriptRecorder(CodexDatabase.getInstance(context), threadId),
         )
 
         return try {
@@ -360,6 +363,7 @@ class AutomationWorker(
                             is AgentEvent.PlanUpdated -> {
                                 // No message.
                             }
+                            is AgentEvent.AssistantDelta -> Unit
                             is AgentEvent.AssistantText -> {
                                 turn.nextStepOrThrow("Model reply")
                                 turn.emitAssistantDelta(event.text)
@@ -433,7 +437,10 @@ class AutomationWorker(
         db: CodexDatabase,
     ): ToolRegistry {
         val gated = ToolRegistry()
-        ToolRegistry.withBuiltins(context).all().forEach { tool ->
+        val memory = PersonalMemory(context)
+        val base = ToolRegistry.withBuiltins(context)
+        if (memory.isRecallEnabled()) base.register(MemorySearchTool(memory))
+        base.all().forEach { tool ->
             gated.register(PolicyGatedTool(tool, threadId, db))
         }
         return gated

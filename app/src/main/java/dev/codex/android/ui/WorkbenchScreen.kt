@@ -66,6 +66,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.codex.android.agent.AgentRuntime
 import dev.codex.android.agent.PendingApproval
+import dev.codex.android.artifacts.isDownloadablePath
 import dev.codex.android.artifacts.Artifact
 import dev.codex.android.artifacts.Diff
 import dev.codex.android.artifacts.ImplementationPlan
@@ -159,7 +160,8 @@ fun WorkbenchScreen(
     terminalStateHolder: TerminalStateHolder = remember { TerminalStateHolder() },
     snapshotEngine: SnapshotEngine? = null,
     onSelectThread: (String) -> Unit = {},
-    onSendPrompt: (prompt: String, mode: ComposerMode, attachedFiles: List<String>) -> Unit = { _, _, _ -> },
+    onSendPrompt: (prompt: String, mode: ComposerMode, attachedFiles: List<String>) -> Boolean = { _, _, _ -> false },
+    attachmentControls: (@Composable (enabled: Boolean) -> Unit)? = null,
     onSteer: (threadId: String, instruction: String) -> Unit = { id, text -> AgentRuntime.steer(id, text) },
     onStop: (threadId: String) -> Unit = { id -> AgentRuntime.stop(id) },
     onRunShellCommand: ((String) -> Unit)? = null,
@@ -313,6 +315,7 @@ fun WorkbenchScreen(
         refreshFiles()
     }
 
+    val workspaceDownload = rememberWorkspaceDownload(workspaceFiles)
     val pendingComments = remember(activeThreadId, commentVersion) {
         InlineCommentStore.pendingComments(activeThreadId)
     }
@@ -424,6 +427,7 @@ fun WorkbenchScreen(
                         }
                     }
 
+                    DownloadStatus(workspaceDownload, Modifier.padding(horizontal = 10.dp))
                     Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                         when (uiState.activeTab) {
                             WorkbenchTab.AGENT -> AgentTabContent(
@@ -454,6 +458,8 @@ fun WorkbenchScreen(
                                     }
                                 },
                                 onSendPrompt = onSendPrompt,
+                                attachmentControls = attachmentControls,
+                                workspaceDownload = workspaceDownload,
                                 onSteer = { text -> onSteer(activeThreadId, text) },
                                 onStop = { onStop(activeThreadId) },
                                 onRunShellCommand = runShellCommand,
@@ -473,6 +479,8 @@ fun WorkbenchScreen(
                                         onUndo = { runSnapshotAction { undo() } },
                                         onRedo = { runSnapshotAction { redo() } },
                                         onSaved = { onEditorSaved(openPath) },
+                                        onDownload = if (isDownloadablePath(openPath)) ({ workspaceDownload.start(openPath) }) else null,
+                                        downloadBusy = workspaceDownload.busy,
                                         onPinToComposer = { pin ->
                                             stateHolder.insertPin(pin)
                                             stateHolder.selectTab(WorkbenchTab.AGENT)
@@ -490,6 +498,7 @@ fun WorkbenchScreen(
                                             openFilePath = path
                                             onOpenFile(path)
                                         },
+                                        download = workspaceDownload,
                                         onAttachToComposer = { path ->
                                             stateHolder.attachFile(path)
                                             stateHolder.selectTab(WorkbenchTab.AGENT)
@@ -778,7 +787,7 @@ private fun SectionHeader(title: String, color: Color = MaterialTheme.colorSchem
  * Also composed directly into the right pane of DesktopWorkstation (H6a).
  */
 @Composable
-fun AgentTabContent(
+internal fun AgentTabContent(
     threadId: String,
     messages: List<TimelineMessage>,
     artifacts: List<Artifact>,
@@ -791,7 +800,9 @@ fun AgentTabContent(
     stateHolder: WorkbenchStateHolder,
     onAddInlineComment: (artifactId: String, targetId: String, text: String) -> Unit,
     onSteerWithComments: () -> Unit,
-    onSendPrompt: (prompt: String, mode: ComposerMode, attachedFiles: List<String>) -> Unit,
+    onSendPrompt: (prompt: String, mode: ComposerMode, attachedFiles: List<String>) -> Boolean,
+    attachmentControls: (@Composable (enabled: Boolean) -> Unit)? = null,
+    workspaceDownload: WorkspaceDownload,
     onSteer: (String) -> Unit,
     onStop: () -> Unit,
     onRunShellCommand: (String) -> Unit,
@@ -847,6 +858,10 @@ fun AgentTabContent(
             }
 
             items(messages) { msg ->
+                if (msg.kind == "artifact") {
+                    WorkspaceFileCard(msg.content, workspaceDownload)
+                    return@items
+                }
                 val showMessage = when (msg.kind) {
                     "thinking" -> uiState.showThinking
                     "tool_call" -> uiState.showDetails
@@ -899,6 +914,7 @@ fun AgentTabContent(
             }
         }
 
+        attachmentControls?.invoke(!isRunning)
         PowerComposer(
             uiState = uiState,
             isRunning = isRunning,
@@ -907,11 +923,10 @@ fun AgentTabContent(
             onSend = { prompt ->
                 if (prompt.trimStart().startsWith("!")) {
                     val cmd = prompt.trimStart().removePrefix("!").trim()
-                    if (cmd.isNotEmpty()) onRunShellCommand(cmd)
-                } else {
-                    onSendPrompt(prompt, uiState.composerMode, uiState.attachedFiles)
+                    if (cmd.isNotEmpty()) { onRunShellCommand(cmd); stateHolder.clearComposer() }
+                } else if (onSendPrompt(prompt, uiState.composerMode, uiState.attachedFiles)) {
+                    stateHolder.clearComposer()
                 }
-                stateHolder.clearComposer()
             },
             onSteer = { instruction ->
                 if (instruction.isNotBlank()) {
@@ -1308,6 +1323,8 @@ private fun EditorTabContent(
     onUndo: () -> Unit,
     onRedo: () -> Unit,
     onSaved: () -> Unit,
+    onDownload: (() -> Unit)? = null,
+    downloadBusy: Boolean = false,
     onPinToComposer: (String) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
@@ -1335,6 +1352,8 @@ private fun EditorTabContent(
                     Text("Redo", fontFamily = FontFamily.Monospace)
                 }
             }
+            if (onDownload != null) TextButton(onClick = onDownload, enabled = !downloadBusy,
+                modifier = Modifier.testTag("workbench_editor_download")) { Text("Download saved") }
         }
         key(editorVersion) {
             SoraEditorScreen(
@@ -1354,6 +1373,7 @@ private fun FilesListTabContent(
     files: List<String>,
     onOpenFile: (String) -> Unit,
     onAttachToComposer: (String) -> Unit,
+    download: WorkspaceDownload,
 ) {
     if (files.isEmpty()) {
         Box(
@@ -1388,6 +1408,8 @@ private fun FilesListTabContent(
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.weight(1f),
                     )
+                    if (isDownloadablePath(path)) TextButton(onClick = { download.start(path) }, enabled = !download.busy,
+                        modifier = Modifier.testTag("workbench_download_$path")) { Text("Download") }
                     TextButton(onClick = { onAttachToComposer(path) }) {
                         Text("@Attach", fontFamily = FontFamily.Monospace)
                     }

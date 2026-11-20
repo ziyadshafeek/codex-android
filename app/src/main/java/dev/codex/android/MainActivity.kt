@@ -57,6 +57,7 @@ import dev.codex.android.server.LocalDaemon
 import dev.codex.android.subagents.SubagentOrchestrator
 import dev.codex.android.terminal.TerminalStateHolder
 import dev.codex.android.ui.ApprovalDialog
+import dev.codex.android.ui.AttachmentControls
 import dev.codex.android.ui.AutomationCreatorScreen
 import dev.codex.android.ui.AutomationListScreen
 import dev.codex.android.ui.ChatScreen
@@ -294,8 +295,8 @@ class MainActivity : ComponentActivity() {
                             id = index.toLong(),
                             threadId = activeThreadId ?: "",
                             role = msg.role,
-                            kind = if (msg.isError) "error" else "text",
-                            content = msg.text,
+                            kind = if (msg.artifactPath != null) "artifact" else if (msg.isError) "error" else "text",
+                            content = msg.artifactPath ?: msg.text,
                             createdAt = System.currentTimeMillis(),
                         )
                     }
@@ -384,7 +385,8 @@ class MainActivity : ComponentActivity() {
                                     terminalStateHolder = terminalStateHolder,
                                     snapshotEngine = snapshotEngine,
                                     onSelectThread = { threadId -> viewModel.openThread(threadId) },
-                                    onSendPrompt = { prompt, mode, _ -> viewModel.sendGoal(prompt, mode.toExecutionMode()) },
+                                    onSendPrompt = { prompt, mode, files -> viewModel.sendGoal(prompt, mode.toExecutionMode(), files) },
+                                    attachmentControls = { enabled -> AttachmentControls(viewModel, enabled) },
                                     onOpenSettings = { showSettings = true },
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -408,7 +410,8 @@ class MainActivity : ComponentActivity() {
                                     terminalStateHolder = terminalStateHolder,
                                     snapshotEngine = snapshotEngine,
                                     onSelectThread = { threadId -> viewModel.openThread(threadId) },
-                                    onSendPrompt = { prompt, mode, _ -> viewModel.sendGoal(prompt, mode.toExecutionMode()) },
+                                    onSendPrompt = { prompt, mode, files -> viewModel.sendGoal(prompt, mode.toExecutionMode(), files) },
+                                    attachmentControls = { enabled -> AttachmentControls(viewModel, enabled) },
                                     onOpenSettings = { showSettings = true },
                                 )
                             } else {

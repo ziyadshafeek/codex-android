@@ -153,7 +153,7 @@ class WorkspaceFileTools(
         val results = mutableListOf<String>()
         Files.walkFileTree(dir.toPath(), object : SimpleFileVisitor<Path>() {
             override fun preVisitDirectory(path: Path, attrs: BasicFileAttributes): FileVisitResult =
-                if (path.fileName.toString() in setOf(".git", "build", "node_modules")) FileVisitResult.SKIP_SUBTREE
+                if (path.fileName.toString() in setOf(".git", ".attachments", "build", "node_modules")) FileVisitResult.SKIP_SUBTREE
                 else FileVisitResult.CONTINUE
 
             override fun visitFile(path: Path, attrs: BasicFileAttributes): FileVisitResult {

@@ -1,6 +1,7 @@
 package dev.codex.android.tools
 
 import dev.codex.android.ci.GitHubActionsEngine
+import dev.codex.android.artifacts.resolveWorkspaceDownload
 import dev.codex.android.linux.ShellResult
 import dev.codex.android.security.SecretScrubber
 import java.io.File
@@ -20,6 +21,7 @@ internal fun ToolRegistry.registerDeveloperTools(
     shell: suspend (String) -> ShellResult,
     github: GitHubActionsEngine,
     repository: () -> String?,
+    onWorkspaceWrite: (String) -> Unit = {},
 ) {
     register(developerTool("workspace_list", "List the source files in the phone workspace.", false) {
         val files = workspace.listFiles().filter { runCatching { sourcePath(it) }.isSuccess }
@@ -32,6 +34,13 @@ internal fun ToolRegistry.registerDeveloperTools(
         require(file.isFile && file.length() <= 150_000) { "File is missing or exceeds the read limit: $path" }
         success(workspace.readFile(path).take(20_000))
     })
+    register(developerTool("workspace_offer_download", "Show an existing workspace file as a Download card in chat. Use when the user asks to download, export, or save to Android Downloads. The user chooses the destination; this does not write outside the workspace.", false,
+        "path" to "Exact workspace-relative path") { args ->
+        val path = args.text("path").trim()
+        resolveWorkspaceDownload(workspace, path)
+        onWorkspaceWrite(path)
+        success("Download card ready for $path. Tell the user to tap Download and choose Downloads. The file has not yet been exported.")
+    })
     register(developerTool("workspace_write", "Create or replace a source file in the workspace. Use this for custom apps, not the template store.", true,
         "path" to "Relative file path", "content" to "Complete UTF-8 text to save") { args ->
         val content = args.text("content")
@@ -39,7 +48,9 @@ internal fun ToolRegistry.registerDeveloperTools(
         val file = workspace.regularSource(path)
         require(content.length <= 150_000 && file.length() <= 150_000) { "File exceeds the tool's size limit" }
         require(SecretScrubber.scrub(content) == content) { "Do not put credentials in workspace source" }
-        success(workspace.writeFile(path, content))
+        val result = workspace.writeFile(path, content)
+        onWorkspaceWrite(path)
+        success(result)
     })
     register(developerTool("shell_exec", "Run one approved command in the on-device Linux workspace; no Android Accessibility needed. Use GitHub Actions for Gradle builds.", true,
         "command" to "Exact shell command (working directory /workspace)") { args ->

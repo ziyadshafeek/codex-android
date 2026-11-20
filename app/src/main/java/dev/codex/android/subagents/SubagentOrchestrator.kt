@@ -1,7 +1,9 @@
 package dev.codex.android.subagents
 
 import android.content.Context
+import dev.codex.android.memory.MemorySearchTool
 import dev.codex.android.memory.PersonalMemory
+import dev.codex.android.context.transcriptRecorder
 import dev.codex.android.agent.AgentEvent
 import dev.codex.android.agent.AgentLoop
 import dev.codex.android.agent.AgentRuntime
@@ -156,12 +158,13 @@ class DefaultSubagentLoopFactory(
             emptyList()
         }
         val gate = DefaultApprovalGate()
+        val memory = PersonalMemory(appContext)
         val base = ToolRegistry.withBuiltins(appContext)
+        if (memory.isRecallEnabled()) base.register(MemorySearchTool(memory))
         val gated = ToolRegistry().apply {
             base.all().forEach { register(GlobGatedTool(it, effectiveRules)) }
         }
         val client = OkHttpOpenAiClient(baseUrl = baseUrl, apiKey = apiKey, model = model)
-        val memory = PersonalMemory(appContext)
         val loop = AgentLoop(
             client = client,
             tools = gated,
@@ -171,6 +174,7 @@ class DefaultSubagentLoopFactory(
             skills = skills,
             recalledMemory = memory::recall,
             soulMarkdown = memory::soulForAgent,
+            transcript = transcriptRecorder(CodexDatabase.getInstance(appContext), threadId),
         )
         // Same event → TurnContext mapping as ChatViewModel.runAgentTurn:
         // one step per plan / model reply / tool start; approvals go through
@@ -181,6 +185,7 @@ class DefaultSubagentLoopFactory(
                 when (event) {
                     is AgentEvent.PlanCreated -> turn.nextStepOrThrow("Plan: ${event.plan.goal}")
                     is AgentEvent.PlanUpdated -> Unit
+                    is AgentEvent.AssistantDelta -> Unit
                     is AgentEvent.AssistantText -> {
                         turn.nextStepOrThrow("Model reply")
                         turn.emitAssistantDelta(event.text)

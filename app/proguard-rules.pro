@@ -37,3 +37,8 @@
 # minifyReleaseWithR8 on the missing classes (CI runs 44639596138,
 # 44639680528) — silence those warnings; nothing at runtime needs them.
 -dontwarn com.google.errorprone.annotations.**
+
+# PDFBox-Android checks for this optional JPEG 2000 decoder at runtime and
+# reports a missing image reader if it is absent. We use PDFBox for text,
+# not images (Android PdfRenderer handles the optional page previews).
+-dontwarn com.gemalto.jp2.JP2Decoder

@@ -40,6 +40,7 @@
                     "output": 15.0
                 },
                 "id": "claude-3-5-sonnet-20241022",
+                "modalities": {"input": ["text", "image"]},
                 "limit": {
                     "context": 200000,
                     "output": 8192
@@ -53,6 +54,7 @@
                     "output": 15.0
                 },
                 "id": "claude-3-7-sonnet-20250219",
+                "modalities": {"input": ["text", "image"]},
                 "limit": {
                     "context": 200000,
                     "output": 64000
@@ -66,6 +68,7 @@
                     "output": 5.0
                 },
                 "id": "claude-haiku-4-5",
+                "modalities": {"input": ["text", "image"]},
                 "limit": {
                     "context": 200000,
                     "output": 64000
@@ -79,6 +82,7 @@
                     "output": 25.0
                 },
                 "id": "claude-opus-4-5",
+                "modalities": {"input": ["text", "image"]},
                 "limit": {
                     "context": 200000,
                     "output": 64000
@@ -92,6 +96,7 @@
                     "output": 15.0
                 },
                 "id": "claude-sonnet-4-5",
+                "modalities": {"input": ["text", "image"]},
                 "limit": {
                     "context": 200000,
                     "output": 64000
@@ -143,6 +148,7 @@
                     "output": 0.4
                 },
                 "id": "gemini-2.0-flash",
+                "modalities": {"input": ["text", "image"]},
                 "limit": {
                     "context": 1048576,
                     "output": 8192
@@ -156,6 +162,7 @@
                     "output": 2.5
                 },
                 "id": "gemini-2.5-flash",
+                "modalities": {"input": ["text", "image"]},
                 "limit": {
                     "context": 1048576,
                     "output": 65536
@@ -169,6 +176,7 @@
                     "output": 10.0
                 },
                 "id": "gemini-2.5-pro",
+                "modalities": {"input": ["text", "image"]},
                 "limit": {
                     "context": 1048576,
                     "output": 65536
@@ -265,6 +273,7 @@
                     "output": 8.0
                 },
                 "id": "gpt-4.1",
+                "modalities": {"input": ["text", "image"]},
                 "limit": {
                     "context": 1047576,
                     "output": 32768
@@ -278,6 +287,7 @@
                     "output": 1.6
                 },
                 "id": "gpt-4.1-mini",
+                "modalities": {"input": ["text", "image"]},
                 "limit": {
                     "context": 1047576,
                     "output": 32768
@@ -291,6 +301,7 @@
                     "output": 10.0
                 },
                 "id": "gpt-4o",
+                "modalities": {"input": ["text", "image"]},
                 "limit": {
                     "context": 128000,
                     "output": 16384
@@ -304,6 +315,7 @@
                     "output": 0.6
                 },
                 "id": "gpt-4o-mini",
+                "modalities": {"input": ["text", "image"]},
                 "limit": {
                     "context": 128000,
                     "output": 16384
@@ -317,6 +329,7 @@
                     "output": 10.0
                 },
                 "id": "gpt-5",
+                "modalities": {"input": ["text", "image"]},
                 "limit": {
                     "context": 400000,
                     "output": 128000
@@ -330,6 +343,7 @@
                     "output": 2.0
                 },
                 "id": "gpt-5-mini",
+                "modalities": {"input": ["text", "image"]},
                 "limit": {
                     "context": 400000,
                     "output": 128000
@@ -343,6 +357,7 @@
                     "output": 8.0
                 },
                 "id": "o3",
+                "modalities": {"input": ["text", "image"]},
                 "limit": {
                     "context": 200000,
                     "output": 100000
@@ -356,6 +371,7 @@
                     "output": 4.4
                 },
                 "id": "o4-mini",
+                "modalities": {"input": ["text", "image"]},
                 "limit": {
                     "context": 200000,
                     "output": 100000
@@ -375,6 +391,7 @@
                     "output": 15.0
                 },
                 "id": "anthropic/claude-sonnet-4-5",
+                "modalities": {"input": ["text", "image"]},
                 "limit": {
                     "context": 200000,
                     "output": 64000
@@ -388,6 +405,7 @@
                     "output": 10.0
                 },
                 "id": "google/gemini-2.5-pro",
+                "modalities": {"input": ["text", "image"]},
                 "limit": {
                     "context": 1048576,
                     "output": 65536
@@ -401,6 +419,7 @@
                     "output": 10.0
                 },
                 "id": "openai/gpt-4o",
+                "modalities": {"input": ["text", "image"]},
                 "limit": {
                     "context": 128000,
                     "output": 16384
