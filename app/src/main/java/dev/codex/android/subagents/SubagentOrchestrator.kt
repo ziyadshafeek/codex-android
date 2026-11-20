@@ -161,6 +161,7 @@ class DefaultSubagentLoopFactory(
             base.all().forEach { register(GlobGatedTool(it, effectiveRules)) }
         }
         val client = OkHttpOpenAiClient(baseUrl = baseUrl, apiKey = apiKey, model = model)
+        val memory = PersonalMemory(appContext)
         val loop = AgentLoop(
             client = client,
             tools = gated,
@@ -168,7 +169,8 @@ class DefaultSubagentLoopFactory(
             planStore = PlanStore(appContext),
             model = model,
             skills = skills,
-            recalledMemory = PersonalMemory(appContext)::recall,
+            recalledMemory = memory::recall,
+            soulMarkdown = memory::soulForAgent,
         )
         // Same event → TurnContext mapping as ChatViewModel.runAgentTurn:
         // one step per plan / model reply / tool start; approvals go through

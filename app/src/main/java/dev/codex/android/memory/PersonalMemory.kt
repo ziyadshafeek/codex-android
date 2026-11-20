@@ -6,6 +6,8 @@ import dev.codex.android.data.KeyStore
 import dev.codex.android.data.MemoryStore
 import dev.codex.android.security.SecretScrubber
 import java.security.MessageDigest
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.util.Locale
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -18,14 +20,14 @@ class PersonalMemory(context: Context) {
 
     fun isRecallEnabled(): Boolean = settings.isMemoryRecallEnabled()
     fun setRecallEnabled(enabled: Boolean) = settings.setMemoryRecallEnabled(enabled)
-    suspend fun list(): List<Fact> = store.allFacts()
+    suspend fun list(): List<Fact> = store.allFacts().filter { it.source == "user" }
     suspend fun forget(key: String): Boolean = store.deleteFact(key.trim().lowercase(Locale.ROOT))
     suspend fun clear(): Boolean = store.clearFacts()
 
     suspend fun remember(key: String?, note: String): String {
         val text = note.trim()
         val name = key?.trim()?.lowercase(Locale.ROOT) ?: automaticKey(text)
-        if (!keyPattern.matches(name) || text.isBlank() || text.length > MAX_NOTE_LENGTH) {
+        if (!memoryKeyPattern.matches(name) || text.isBlank() || text.length > MAX_NOTE_LENGTH) {
             return "Use a name of up to 48 letters, numbers, dots, underscores or hyphens, and a note of 1–$MAX_NOTE_LENGTH characters."
         }
         if (looksSensitive(text) || looksSensitive(key.orEmpty())) {
@@ -35,6 +37,36 @@ class PersonalMemory(context: Context) {
         else "Could not save the note. Memory holds up to ${MemoryStore.MAX_FACTS} notes."
     }
 
+    internal suspend fun saveMarkdown(expected: Map<String, String>, markdown: String): String? {
+        val notes = try {
+            MemoryMarkdown.parse(markdown)
+        } catch (e: IllegalArgumentException) {
+            return e.message ?: "Check the Markdown and try again."
+        } catch (e: IllegalStateException) {
+            return e.message ?: "Check the Markdown and try again."
+        }
+        if (notes.isEmpty() && expected.isNotEmpty()) return "To delete every note, use Clear all in the Notes tab."
+        return when (store.replaceUserFacts(expected, notes)) {
+            MemoryStore.ReplaceResult.SAVED -> null
+            MemoryStore.ReplaceResult.CHANGED -> "Notes changed elsewhere. Reload the saved notes and reapply your edits."
+            MemoryStore.ReplaceResult.FAILED -> "Could not save the Markdown. Saved notes were not changed."
+        }
+    }
+
+    internal fun loadSoul(): String = settings.soulMarkdown()
+
+    internal suspend fun saveSoul(markdown: String): String? = withContext(Dispatchers.IO) {
+        val text = markdown.trim()
+        when {
+            text.length > MAX_SOUL_LENGTH -> "Use at most $MAX_SOUL_LENGTH characters."
+            looksSensitive(text) -> "This looks like a credential. Nothing was saved."
+            !settings.saveSoulMarkdown(text) -> "Could not save Soul.md."
+            else -> null
+        }
+    }
+
+    internal fun soulForAgent(): String? = loadSoul().take(MAX_SOUL_LENGTH).takeIf { it.isNotBlank() && !looksSensitive(it) }
+
     suspend fun recall(goal: String): String? {
         if (!isRecallEnabled()) return null
         return memoryContext(goal, list())
@@ -42,7 +74,6 @@ class PersonalMemory(context: Context) {
 }
 
 internal const val MAX_NOTE_LENGTH = 400
-private val keyPattern = Regex("[a-z0-9][a-z0-9._-]{0,47}")
 private val tokenPattern = Regex("[\\p{L}\\p{N}]{2,}")
 private val stopWords = setOf("and", "can", "could", "do", "does", "for", "have", "how", "in", "is", "it", "me", "my", "of", "on", "please", "the", "to", "use", "what", "with", "would", "you", "about", "that", "this", "will", "which", "should", "know", "remember", "prefer", "preference", "preferences", "note")
 private val credentialLabel = Regex("(?i)\\b(?:password|passphrase|api[_ -]?key|access[_ -]?token|private[_ -]?key|recovery phrase|seed phrase|secret key)\\b")
@@ -92,7 +123,7 @@ internal fun parseMemoryCommand(input: String): MemoryCommand? {
     return when {
         command == "/remember" -> {
             val proposedKey = argument.substringBefore('=').trim()
-            if ('=' in argument && keyPattern.matches(proposedKey.lowercase(Locale.ROOT))) {
+            if ('=' in argument && memoryKeyPattern.matches(proposedKey.lowercase(Locale.ROOT))) {
                 MemoryCommand.Remember(proposedKey, argument.substringAfter('=').trim())
             } else if (argument.isBlank()) MemoryCommand.Help else MemoryCommand.Remember(null, argument)
         }

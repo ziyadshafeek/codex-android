@@ -3,6 +3,7 @@ package dev.codex.android.data
 import android.content.ContentValues
 import android.content.Context
 import android.database.Cursor
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -174,10 +175,10 @@ class MemoryStore(context: Context) {
     }
 
     /** True only if a row was removed. */
-    suspend fun deleteFact(key: String): Boolean = deleteFacts("key = ?", arrayOf(key)) > 0
+    suspend fun deleteFact(key: String): Boolean = deleteFacts("key = ? AND source = ?", arrayOf(key, "user")) > 0
 
     /** True when the database operation succeeded, even if already empty. */
-    suspend fun clearFacts(): Boolean = deleteFacts(null, null) >= 0
+    suspend fun clearFacts(): Boolean = deleteFacts("source = ?", arrayOf("user")) >= 0
 
     private suspend fun deleteFacts(where: String?, args: Array<String>?): Int = withContext(Dispatchers.IO) {
         try {
@@ -188,6 +189,47 @@ class MemoryStore(context: Context) {
             -1
         }
     }
+
+    internal enum class ReplaceResult { SAVED, CHANGED, FAILED }
+
+    /** Update only user notes. Abort if anything changed while the editor was open. */
+    internal suspend fun replaceUserFacts(expected: Map<String, String>, updated: Map<String, String>): ReplaceResult =
+        withContext(Dispatchers.IO) {
+            try {
+                val db = dbHelper.writableDatabase
+                db.beginTransaction()
+                try {
+                    val saved = db.query(CodexDatabase.TABLE_FACTS, arrayOf("key", "value"), "source = ?",
+                        arrayOf("user"), null, null, null).use { cursor ->
+                        buildMap { while (cursor.moveToNext()) put(cursor.getString(0), cursor.getString(1)) }
+                    }
+                    if (expected != saved) return@withContext ReplaceResult.CHANGED
+                    val now = System.currentTimeMillis()
+                    for (key in saved.keys - updated.keys) {
+                        db.delete(CodexDatabase.TABLE_FACTS, "key = ? AND source = ?", arrayOf(key, "user"))
+                    }
+                    for ((key, text) in updated) {
+                        if (saved[key] == text) continue
+                        val values = ContentValues().apply { put("value", text); put("updated_at", now) }
+                        if (key in saved) db.update(CodexDatabase.TABLE_FACTS, values, "key = ? AND source = ?", arrayOf(key, "user"))
+                        else {
+                            values.put("key", key)
+                            values.put("source", "user")
+                            values.put("created_at", now)
+                            db.insertOrThrow(CodexDatabase.TABLE_FACTS, null, values)
+                        }
+                    }
+                    db.setTransactionSuccessful()
+                    ReplaceResult.SAVED
+                } finally {
+                    db.endTransaction()
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                ReplaceResult.FAILED
+            }
+        }
 
     /**
      * Facts whose `key` OR `value` contains [query] (case-insensitive LIKE).

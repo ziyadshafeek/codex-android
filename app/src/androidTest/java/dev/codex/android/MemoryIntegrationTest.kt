@@ -9,6 +9,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.codex.android.data.KeyStore
 import dev.codex.android.data.MemoryStore
@@ -44,6 +45,17 @@ class MemoryIntegrationTest {
                 compose.onNodeWithTag("settings_base_url").performTextInput("http://127.0.0.1:${server.port}/v1")
                 compose.onNodeWithTag("settings_api_key").performTextInput("test-key-memory")
                 compose.onNodeWithTag("settings_save").performScrollTo().performClick()
+                compose.onNodeWithTag("settings_memory").performScrollTo().performClick()
+                compose.onNodeWithTag("memory_tab_MARKDOWN").performClick()
+                compose.onNodeWithTag("memory_markdown").performTextReplacement("# Memory\n\n## garden-test\n**Basil** is the garden test plant.")
+                compose.activityRule.scenario.recreate()
+                compose.onNodeWithTag("memory_markdown_save").performClick()
+                waitForText("Memory.md saved.")
+                compose.onNodeWithTag("memory_tab_SOUL").performClick()
+                compose.onNodeWithTag("soul_markdown").performTextReplacement("# Style\nUse tiny numbered steps.")
+                compose.onNodeWithTag("soul_markdown_save").performClick()
+                waitForText("Soul.md saved.")
+                compose.onNodeWithText("Done").performClick()
                 compose.onNodeWithText("Back").performClick()
 
                 enqueueReply(server, "Garden reply one")
@@ -51,7 +63,9 @@ class MemoryIntegrationTest {
                 val first = server.takeRequest(12, TimeUnit.SECONDS) ?: error("No model request")
                 val firstBody = first.body.readUtf8()
                 assertEquals("/v1/chat/completions", first.path)
-                assertTrue(firstBody.contains("Marigold is the garden test plant"))
+                assertTrue(firstBody.contains("**Basil** is the garden test plant"))
+                assertFalse(firstBody.contains("Marigold"))
+                assertTrue(firstBody.contains("Use tiny numbered steps."))
                 waitForText("Garden reply one")
                 waitForReady()
                 compose.onNodeWithTag("chat_new").performClick()
@@ -65,7 +79,9 @@ class MemoryIntegrationTest {
                 enqueueReply(server, "Garden reply two")
                 send("What is the garden test plant now?")
                 val second = server.takeRequest(12, TimeUnit.SECONDS) ?: error("No model request")
-                assertFalse(second.body.readUtf8().contains("Marigold"))
+                val secondBody = second.body.readUtf8()
+                assertFalse(secondBody.contains("Basil"))
+                assertTrue(secondBody.contains("Use tiny numbered steps."))
                 waitForText("Garden reply two")
                 waitForReady()
                 send("/forget garden-test")
@@ -76,6 +92,7 @@ class MemoryIntegrationTest {
                 runBlocking {
                     memory.forget("garden-test")
                     memory.setRecallEnabled(true)
+                    memory.saveSoul("")
                     keyStore.clearApiKey()
                     keyStore.setBaseUrl("")
                     keyStore.setModel("")

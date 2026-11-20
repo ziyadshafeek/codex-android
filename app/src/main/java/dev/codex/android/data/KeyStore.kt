@@ -175,6 +175,12 @@ class KeyStore(context: Context) {
     internal fun autoCompact(): Boolean = prefs.getBoolean("auto_compact_chat", true)
     internal fun setAutoCompact(enabled: Boolean) { prefs.edit().putBoolean("auto_compact_chat", enabled).apply() }
 
+    internal fun soulMarkdown(): String = prefs.getString("agent_soul_markdown", "").orEmpty()
+
+    internal fun saveSoulMarkdown(text: String): Boolean = prefs.edit().apply {
+        if (text.isBlank()) remove("agent_soul_markdown") else putString("agent_soul_markdown", text)
+    }.commit()
+
     internal fun isMemoryRecallEnabled(): Boolean = prefs.getBoolean("memory_recall_enabled", true)
 
     internal fun setMemoryRecallEnabled(enabled: Boolean) {

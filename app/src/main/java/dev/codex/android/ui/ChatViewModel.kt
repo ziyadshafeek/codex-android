@@ -419,7 +419,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         else buildString {
                             appendLine("Saved notes (${matching.size}):")
                             matching.take(10).forEach { appendLine("${it.key}: ${it.value}") }
-                            if (matching.size > 10) append("Search or edit all notes in Settings → Memory.")
+                            if (matching.size > 10) append("Search or edit all notes in Settings → Memory & style.")
                         }.trimEnd()
                     }
                     MemoryCommand.Help -> "Use /remember name = note, /memory to list notes, or /forget name."
@@ -653,7 +653,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             model = model,
             skills = skills,
             recentConversation = conversation,
-            recalledMemory = { personalMemory.recall(it) },
+            recalledMemory = personalMemory::recall,
+            soulMarkdown = personalMemory::soulForAgent,
             sessionInstructions = if (mode == ExecutionMode.PLAN) {
                 "Plan mode is read-only. Inspect with workspace_list and workspace_read; ask the user to switch to Build before changing files, running shell commands, or starting CI."
             } else {

@@ -78,7 +78,7 @@ Payments are NOT live: the Buy button shows a "Payments are not live yet" dialog
 
 ### Memory across chats
 
-Say `Remember that I prefer short answers` or enter `/remember preference.style = Short answers` in the composer. Named notes can be updated by saving the same name again. `/memory [search]` lists saved notes locally; `/forget name` removes one. **Settings → Memory** can search, add, edit, delete, or pause recall without deleting saved notes. No provider is needed for these actions.
+Say `Remember that I prefer short answers` or enter `/remember preference.style = Short answers` in the composer. Named notes can be updated by saving the same name again. `/memory [search]` lists saved notes locally; `/forget name` removes one. **Settings → Memory & style** can search, add, edit, delete, or pause recall without deleting saved notes. The **Memory.md** tab edits the same notes in Markdown: each `## note-name` section is one note. Use `\##` to keep a note-shaped heading inside a note. **Soul.md** sets response style and workflow preferences without granting tool access or changing approval rules. Save it empty to return to the default style. Editing either tab does not require a provider.
 
 The agent retrieves a small set of relevant notes plus standing preferences for new requests, including CLI and scheduled runs. Recall sends those notes to the configured provider as background data. Notes are stored in the existing app-private database, excluded from backup; no separate memory service, raw transcript indexing, or credential storage. Removing a note stops future retrieval of it, but doesn't erase older chats or data already sent to a provider.
 

@@ -25,6 +25,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -203,7 +204,7 @@ class MainActivity : ComponentActivity() {
                     var showOnboarding by remember {
                         mutableStateOf(!onboardingPrefs.isComplete())
                     }
-                    var showSettings by remember { mutableStateOf(false) }
+                    var showSettings by rememberSaveable { mutableStateOf(false) }
                     var showAutomations by remember { mutableStateOf(false) }
                     var createAutomation by remember { mutableStateOf(false) }
                     var showReviewInbox by remember { mutableStateOf(false) }

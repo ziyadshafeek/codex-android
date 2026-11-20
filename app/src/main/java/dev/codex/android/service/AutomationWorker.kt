@@ -327,6 +327,7 @@ class AutomationWorker(
             emptyList()
         }
         val client = OkHttpOpenAiClient(baseUrl = baseUrl, apiKey = apiKey, model = model)
+        val memory = PersonalMemory(context)
         val loop = AgentLoop(
             client = client,
             tools = policyGatedRegistry(context, threadId, db),
@@ -334,7 +335,8 @@ class AutomationWorker(
             planStore = PlanStore(context),
             model = model,
             skills = skills,
-            recalledMemory = PersonalMemory(context)::recall,
+            recalledMemory = memory::recall,
+            soulMarkdown = memory::soulForAgent,
         )
 
         return try {
