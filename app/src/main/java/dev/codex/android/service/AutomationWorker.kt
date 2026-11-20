@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import java.time.Instant
+import dev.codex.android.memory.MemorySearchTool
 import dev.codex.android.memory.PersonalMemory
 import dev.codex.android.agent.AgentEvent
 import dev.codex.android.agent.AgentLoop
@@ -433,7 +434,10 @@ class AutomationWorker(
         db: CodexDatabase,
     ): ToolRegistry {
         val gated = ToolRegistry()
-        ToolRegistry.withBuiltins(context).all().forEach { tool ->
+        val memory = PersonalMemory(context)
+        val base = ToolRegistry.withBuiltins(context)
+        if (memory.isRecallEnabled()) base.register(MemorySearchTool(memory))
+        base.all().forEach { tool ->
             gated.register(PolicyGatedTool(tool, threadId, db))
         }
         return gated

@@ -2,6 +2,7 @@ package dev.codex.android.api
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import kotlinx.serialization.json.JsonObject
 
 /**
@@ -22,6 +23,7 @@ data class ChatMessage(
     @SerialName("tool_call_id")
     val toolCallId: String? = null,
     val name: String? = null,
+    @Transient val imageUrls: List<String> = emptyList(),
 )
 
 /** One function call requested by the assistant. */

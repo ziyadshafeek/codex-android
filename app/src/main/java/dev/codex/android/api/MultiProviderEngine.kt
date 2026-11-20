@@ -507,10 +507,7 @@ class MultiProviderEngine(
             put("model", profile.model)
             put(
                 "messages",
-                CodexJson.encodeToJsonElement(
-                    kotlinx.serialization.builtins.ListSerializer(ChatMessage.serializer()),
-                    messages,
-                ),
+                chatMessagesWire(messages),
             )
             if (tools.isNotEmpty()) {
                 put(

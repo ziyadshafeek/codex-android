@@ -83,3 +83,9 @@ Say `Remember that I prefer short answers` or enter `/remember preference.style 
 The agent retrieves a small set of relevant notes plus standing preferences for new requests, including CLI and scheduled runs. Recall sends those notes to the configured provider as background data. Notes are stored in the existing app-private database, excluded from backup; no separate memory service, raw transcript indexing, or credential storage. Removing a note stops future retrieval of it, but doesn't erase older chats or data already sent to a provider.
 
 The design adapts the [OpenClaw memory model](https://github.com/openclaw/openclaw/blob/main/docs/concepts/memory.md): durable, user-visible notes separate from session transcripts, with bounded recall. This is a native implementation using the app's database and runner rather than a port of the upstream gateway.
+
+### Attach files to a prompt
+
+**Attach files** opens Android Files in both chat and Workbench. In Workbench, `@file` and the Files tab also attach workspace files. Send up to three files with a prompt: UTF-8 text (6,000 characters per file), JPEG/PNG/WebP (2 MB each), or PDFs (8 MB, first three pages rendered on-device). Images and PDFs require a vision-capable model. Files are read locally first; only send shares contents with the configured provider. Chat history retains the filenames, not the original attachment payload; attach the file again for a later turn that needs its contents.
+
+With recall enabled, Codex preloads relevant saved notes and can use a read-only search to look up differently worded preferences or decisions. It applies **Soul.md** as the default style for each run, even if note recall is paused. Only you can write durable notes.

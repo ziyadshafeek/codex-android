@@ -1,6 +1,7 @@
 package dev.codex.android.subagents
 
 import android.content.Context
+import dev.codex.android.memory.MemorySearchTool
 import dev.codex.android.memory.PersonalMemory
 import dev.codex.android.agent.AgentEvent
 import dev.codex.android.agent.AgentLoop
@@ -156,12 +157,13 @@ class DefaultSubagentLoopFactory(
             emptyList()
         }
         val gate = DefaultApprovalGate()
+        val memory = PersonalMemory(appContext)
         val base = ToolRegistry.withBuiltins(appContext)
+        if (memory.isRecallEnabled()) base.register(MemorySearchTool(memory))
         val gated = ToolRegistry().apply {
             base.all().forEach { register(GlobGatedTool(it, effectiveRules)) }
         }
         val client = OkHttpOpenAiClient(baseUrl = baseUrl, apiKey = apiKey, model = model)
-        val memory = PersonalMemory(appContext)
         val loop = AgentLoop(
             client = client,
             tools = gated,

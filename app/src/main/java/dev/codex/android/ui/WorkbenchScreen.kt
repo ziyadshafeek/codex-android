@@ -159,7 +159,8 @@ fun WorkbenchScreen(
     terminalStateHolder: TerminalStateHolder = remember { TerminalStateHolder() },
     snapshotEngine: SnapshotEngine? = null,
     onSelectThread: (String) -> Unit = {},
-    onSendPrompt: (prompt: String, mode: ComposerMode, attachedFiles: List<String>) -> Unit = { _, _, _ -> },
+    onSendPrompt: (prompt: String, mode: ComposerMode, attachedFiles: List<String>) -> Boolean = { _, _, _ -> false },
+    attachmentControls: (@Composable (enabled: Boolean) -> Unit)? = null,
     onSteer: (threadId: String, instruction: String) -> Unit = { id, text -> AgentRuntime.steer(id, text) },
     onStop: (threadId: String) -> Unit = { id -> AgentRuntime.stop(id) },
     onRunShellCommand: ((String) -> Unit)? = null,
@@ -454,6 +455,7 @@ fun WorkbenchScreen(
                                     }
                                 },
                                 onSendPrompt = onSendPrompt,
+                                attachmentControls = attachmentControls,
                                 onSteer = { text -> onSteer(activeThreadId, text) },
                                 onStop = { onStop(activeThreadId) },
                                 onRunShellCommand = runShellCommand,
@@ -791,7 +793,8 @@ fun AgentTabContent(
     stateHolder: WorkbenchStateHolder,
     onAddInlineComment: (artifactId: String, targetId: String, text: String) -> Unit,
     onSteerWithComments: () -> Unit,
-    onSendPrompt: (prompt: String, mode: ComposerMode, attachedFiles: List<String>) -> Unit,
+    onSendPrompt: (prompt: String, mode: ComposerMode, attachedFiles: List<String>) -> Boolean,
+    attachmentControls: (@Composable (enabled: Boolean) -> Unit)? = null,
     onSteer: (String) -> Unit,
     onStop: () -> Unit,
     onRunShellCommand: (String) -> Unit,
@@ -899,6 +902,7 @@ fun AgentTabContent(
             }
         }
 
+        attachmentControls?.invoke(!isRunning)
         PowerComposer(
             uiState = uiState,
             isRunning = isRunning,
@@ -907,11 +911,10 @@ fun AgentTabContent(
             onSend = { prompt ->
                 if (prompt.trimStart().startsWith("!")) {
                     val cmd = prompt.trimStart().removePrefix("!").trim()
-                    if (cmd.isNotEmpty()) onRunShellCommand(cmd)
-                } else {
-                    onSendPrompt(prompt, uiState.composerMode, uiState.attachedFiles)
+                    if (cmd.isNotEmpty()) { onRunShellCommand(cmd); stateHolder.clearComposer() }
+                } else if (onSendPrompt(prompt, uiState.composerMode, uiState.attachedFiles)) {
+                    stateHolder.clearComposer()
                 }
-                stateHolder.clearComposer()
             },
             onSteer = { instruction ->
                 if (instruction.isNotBlank()) {

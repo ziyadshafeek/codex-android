@@ -59,6 +59,7 @@ fun ChatScreen(
     val hasKey by viewModel.hasKey.collectAsState()
     val compacting by viewModel.compacting.collectAsState()
     val rateLimitCountdown by viewModel.rateLimitCountdown.collectAsState()
+    val attaching by viewModel.attaching.collectAsState()
     val listState = rememberLazyListState()
     var text by remember(activeThreadId) { mutableStateOf("") }
 
@@ -272,6 +273,7 @@ fun ChatScreen(
                     modifier = Modifier.testTag("chat_compact")) { Text(if (compacting) "Summarising…" else "Summarise") }
                 if (text.isNotBlank()) Text("Draft ~${contextTokens(text)} tokens", style = MaterialTheme.typography.labelSmall)
             }
+            AttachmentControls(viewModel, enabled = !isRunning && !compacting, modifier = Modifier.padding(horizontal = 12.dp))
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -320,12 +322,10 @@ fun ChatScreen(
                             // M1: while a run is active, sending STEERS
                             // the active run instead of starting a new goal.
                             activeThreadId?.let { AgentRuntime.steer(it, text) }
-                        } else {
-                            viewModel.sendGoal(text)
-                        }
-                        text = ""
+                            text = ""
+                        } else if (viewModel.sendGoal(text)) text = ""
                     },
-                    enabled = !compacting && text.isNotBlank() && (!isRunning || activeThreadId != null),
+                    enabled = !compacting && !attaching && text.isNotBlank() && (!isRunning || activeThreadId != null),
                     modifier = Modifier.padding(start = 8.dp).testTag("chat_send")
                 ) {
                     Text(if (isRunning) "Steer" else "Send")
