@@ -1,0 +1,29 @@
+name: Coarena endpoint check
+
+# Verifies Ziyad's Coarena key + gpt-6-luna end to end (models list + one
+# chat completion). The key lives in the COARENA_API_KEY repo secret —
+# never committed, never printed (GitHub masks secrets in logs).
+on:
+  workflow_dispatch:
+
+jobs:
+  coarena-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Coarena models endpoint
+        run: |
+          set -euo pipefail
+          code=$(curl -sS -o /tmp/models.json -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.COARENA_API_KEY }}" https://coarena.ai/api/v1/models)
+          echo "models HTTP: $code"
+          test "$code" = "200"
+          grep -q 'gpt-6-luna' /tmp/models.json
+          echo "gpt-6-luna listed"
+
+      - name: Check gpt-6-luna chat completion
+        run: |
+          set -euo pipefail
+          curl -sS -m 60 -H "Authorization: Bearer ${{ secrets.COARENA_API_KEY }}" -H "Content-Type: application/json" \
+            -d '{"model":"gpt-6-luna","messages":[{"role":"user","content":"Reply with exactly the word OK."}],"max_tokens":10}' \
+            https://coarena.ai/api/v1/chat/completions -o /tmp/chat.json
+          grep -q '"OK"' /tmp/chat.json
+          echo "gpt-6-luna replied OK"
