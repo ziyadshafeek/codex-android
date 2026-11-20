@@ -62,10 +62,16 @@ fun ChatScreen(
     val rateLimitCountdown by viewModel.rateLimitCountdown.collectAsState()
     val download = rememberWorkspaceDownload(viewModel.workspaceFileTools)
     var showFiles by remember { mutableStateOf(false) }
-    if (showFiles) WorkspaceFilesDialog(viewModel.workspaceFileTools, download, onClose = { showFiles = false })
+    if (showFiles) WorkspaceFilesDialog(viewModel.workspaceFileTools, download, canDelete = !isRunning && !compacting, onClose = { showFiles = false })
     val attaching by viewModel.attaching.collectAsState()
     val listState = rememberLazyListState()
     var text by remember(activeThreadId) { mutableStateOf("") }
+    var showNewChat by remember { mutableStateOf(false) }
+    if (showNewChat) NewChatFilesDialog(viewModel, activeThreadId, onClose = { showNewChat = false }, onStart = {
+        text = ""
+        viewModel.newChat()
+        showNewChat = false
+    })
 
     // M8 voice input + M1 Stop/Steer composer controls. The composable
     // calls AgentRuntime directly for stop/steer; the ViewModel-level
@@ -276,7 +282,7 @@ fun ChatScreen(
                 )
             }
             Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = { text = ""; viewModel.newChat() }, enabled = !isRunning && !compacting,
+                TextButton(onClick = { showNewChat = true }, enabled = !isRunning && !compacting && !attaching,
                     modifier = Modifier.testTag("chat_new")) { Text("New chat") }
                 TextButton(onClick = if (compacting) viewModel::cancelSummary else viewModel::compactChat,
                     enabled = activeThreadId != null && !isRunning,

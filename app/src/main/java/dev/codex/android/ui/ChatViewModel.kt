@@ -14,6 +14,10 @@ import dev.codex.android.artifacts.changedWorkspaceOutputs
 import dev.codex.android.artifacts.downloadIndex
 import dev.codex.android.artifacts.isDownloadablePath
 import dev.codex.android.artifacts.resolveWorkspaceDownload
+import dev.codex.android.attachments.AttachmentReadTool
+import dev.codex.android.attachments.FileLibrary
+import dev.codex.android.attachments.ManagedFile
+import dev.codex.android.api.ModelsCatalog
 import dev.codex.android.attachments.AttachmentReader
 import dev.codex.android.attachments.MAX_ATTACHMENTS
 import dev.codex.android.attachments.PromptAttachment
@@ -153,7 +157,60 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private var chatGeneration = 0
     private val skillStore: SkillStore = SkillStore(application)
 
-    private val attachmentReader = AttachmentReader(application)
+    internal val fileLibrary by lazy { FileLibrary(application, workspaceFileTools) }
+    private val attachmentReader by lazy { AttachmentReader(application, fileLibrary) }
+    private val modelCatalog by lazy { ModelsCatalog(okhttp3.OkHttpClient(), application.cacheDir, application.assets) }
+
+    private suspend fun catalogModel(base: String, model: String): dev.codex.android.api.ModelInfo? {
+        val host = runCatching { java.net.URI(base).host?.lowercase(java.util.Locale.ROOT) }.getOrNull()
+        val provider = when (host) {
+            "api.openai.com" -> "openai"
+            "generativelanguage.googleapis.com" -> "google"
+            "integrate.api.nvidia.com" -> "nvidia"
+            "openrouter.ai" -> "openrouter"
+            else -> return null
+        }
+        modelCatalog.loadOffline()
+        return modelCatalog.lookup("$provider/$model")?.takeIf { it.providerId == provider }
+    }
+
+    internal fun imageMode() = keyStore.imageMode()
+    internal fun setImageMode(value: String) = keyStore.setImageMode(value)
+
+    internal fun attachLibrary(entry: ManagedFile) {
+        if (startingTurn || _compacting.value || _isRunning.value || _attaching.value || _attachments.value.size >= MAX_ATTACHMENTS) return
+        _attaching.value = true
+        _attachmentError.value = null
+        attachmentJob = viewModelScope.launch {
+            try {
+                val item = fileLibrary.fromLibrary(entry)
+                _attachments.update { it + PromptAttachment(item) }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { _attachmentError.value = attachmentFailure(e) }
+            finally { _attaching.value = false }
+        }
+    }
+
+    internal suspend fun deleteManagedFile(entry: ManagedFile) {
+        check(entry.saved || (!startingTurn && !_isRunning.value && !_attaching.value && !_compacting.value)) { "Wait for chat to finish before deleting a chat file." }
+        fileLibrary.delete(entry)
+        if (entry.group == "drafts") _attachments.update { it.filterNot { file -> file.id == entry.id } }
+    }
+
+    internal suspend fun newChatOutputs(threadId: String): List<String> {
+        val db = CodexDatabase.getInstance(getApplication())
+        val outputs = linkedSetOf<String>()
+        var after = 0L
+        while (true) {
+            val page = db.getMessages(threadId, limit = 128, kind = "artifact", afterId = after)
+            if (page.isEmpty()) break
+            for (row in page) {
+                if (runCatching { dev.codex.android.artifacts.resolveWorkspaceDownload(workspaceFileTools, row.content) }.isSuccess) outputs += row.content
+            }
+            after = page.last().id
+        }
+        return outputs.toList()
+    }
     private val _attachments = MutableStateFlow<List<PromptAttachment>>(emptyList())
     internal val attachments = _attachments.asStateFlow()
     private val _attaching = MutableStateFlow(false)
@@ -163,7 +220,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private var attachmentJob: Job? = null
 
     internal fun attachFiles(uris: List<Uri>) {
-        if (uris.isEmpty() || startingTurn || _isRunning.value || _attaching.value) return
+        if (uris.isEmpty() || startingTurn || _compacting.value || _isRunning.value || _attaching.value) return
         _attachmentError.value = null
         val room = MAX_ATTACHMENTS - _attachments.value.size
         if (room <= 0) {
@@ -179,7 +236,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 if (picks.size > room) errors += "Only $room more files fit in this draft."
                 for (uri in picks.take(room)) {
                     try {
-                        val attachment = attachmentReader.read(uri)
+                        val attachment = PromptAttachment(fileLibrary.import(uri))
                         if (generation != chatGeneration) return@launch
                         _attachments.update { it + attachment }
                     } catch (e: CancellationException) {
@@ -199,13 +256,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     internal fun removeAttachment(id: String) {
         if (startingTurn) return
+        val removed = _attachments.value.firstOrNull { it.id == id }
         _attachments.update { items -> items.filterNot { it.id == id } }
+        if (removed != null) viewModelScope.launch { runCatching { fileLibrary.delete(removed.original) } }
         _attachmentError.value = null
     }
 
-    private fun clearAttachments() {
+    private fun clearAttachments(deleteDraft: Boolean = true) {
         attachmentJob?.cancel()
+        val discarded = _attachments.value
         _attachments.value = emptyList()
+        if (deleteDraft && discarded.isNotEmpty()) viewModelScope.launch {
+            for (item in discarded) runCatching { fileLibrary.delete(item.original) }
+        }
         _attaching.value = false
         _attachmentError.value = null
     }
@@ -436,7 +499,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Start a separate thread on the next message, without deleting the previous one. */
     fun newChat() {
-        if (startingTurn || _isRunning.value || _compacting.value) return
+        if (startingTurn || _isRunning.value || _compacting.value || _attaching.value) return
         chatGeneration++
         clearAttachments()
         freshChat = true
@@ -466,7 +529,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 val db = CodexDatabase.getInstance(getApplication())
                 val client = OkHttpOpenAiClient(baseUrl = base, apiKey = key, model = model)
                 val conversation = ConversationContext(db)
-                val latest = conversation.compact(threadId, client, model, historyBudget(keyStore.contextTokens()),
+                val latest = conversation.compact(threadId, client, model, historyBudget(catalogModel(base, model)?.contextWindow?.takeIf { it > 0 }?.let { minOf(it, keyStore.contextTokens()) } ?: keyStore.contextTokens()),
                     automatic = false, onProgress = { _summaryProgress.value = it })
                 if (latest == null) append(ChatUiMessage("system", "No new chat messages to summarise."))
                 else append(ChatUiMessage("system", latest.content, contextSummary = true))
@@ -550,16 +613,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val model = keyStore.getModel()
         viewModelScope.launch {
             try {
-                val files = try {
-                    picked + workspacePaths.map { path -> attachmentReader.readWorkspace(workspaceFileTools, path) }
+                val threadId = ensureThread(goal)
+                val workspaceFiles = mutableListOf<ManagedFile>()
+                try {
+                    for (path in workspacePaths) workspaceFiles += fileLibrary.fromWorkspace(path, "drafts")
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
+                    for (entry in workspaceFiles) runCatching { fileLibrary.delete(entry) }
                     _attachmentError.value = attachmentFailure(e)
                     return@launch
                 }
+                val files = picked.map { it.original } + workspaceFiles
                 val receipt = if (files.isEmpty()) goal else "$goal\n\nAttached: ${files.joinToString { it.name }}"
-                val threadId = ensureThread(goal)
                 // startTurn returns false when a run is already active for
                 // this thread: one run per thread at a time. The user's
                 // message, the History entry and the memory save happen
@@ -575,7 +641,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     runAgentTurn(this, threadId, receipt, baseUrl, apiKey, model, mode, files)
                 }
                 if (started) {
-                    clearAttachments()
+                    clearAttachments(deleteDraft = false)
                     append(ChatUiMessage("user", receipt))
                     recordHistory(goal)
                     // Fire-and-forget: a memory failure must never affect
@@ -587,6 +653,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             // Never crash on a memory failure.
                         }
                     }
+                } else {
+                    for (entry in workspaceFiles) runCatching { fileLibrary.delete(entry) }
                 }
             } finally {
                 startingTurn = false
@@ -705,7 +773,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         apiKey: String,
         model: String,
         mode: ExecutionMode,
-        files: List<PromptAttachment>,
+        files: List<ManagedFile>,
     ): String {
         val db = CodexDatabase.getInstance(getApplication())
         // BUG 3: events travel through runWithEventChannel (below), not
@@ -728,7 +796,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             onRateLimitWait = { delayMs -> startRateLimitCountdown(delayMs) },
         )
         val context = ConversationContext(db)
-        val budget = historyBudget(keyStore.contextTokens())
+        val capability = catalogModel(baseUrl, model)
+        val budget = historyBudget(capability?.contextWindow?.takeIf { it > 0 }?.let { minOf(it, keyStore.contextTokens()) } ?: keyStore.contextTokens())
+        val inlineImages = when (keyStore.imageMode(baseUrl, model)) {
+            "on" -> true
+            "off" -> false
+            else -> capability?.inputModalities?.contains("image") == true
+        }
+        val staged = files.map { fileLibrary.promote(it, threadId) }
+        val attachmentMessages = staged.map { attachmentReader.message(it, inlineImages) }
         var summary = context.latest(threadId)
         if (keyStore.autoCompact()) {
             try {
@@ -744,6 +820,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
         val history = db.getMessages(threadId, limit = 128, mostRecent = true)
         val conversation = buildConversationContext(history, summary, goal, budget)
+        for (entry in staged) db.appendMessage(TimelineMessage(threadId = threadId, role = "user", kind = "attachment",
+            content = "${entry.name} (${entry.bytes} bytes) at ${entry.vmPath}; attachment id ${entry.id}"))
         val outputPaths = Collections.synchronizedSet(linkedSetOf<String>())
         val soul = personalMemory.soulForAgent()
         if (soul != null && activeThreadId.value == threadId) append(ChatUiMessage("system", "Using Soul.md style"))
@@ -850,7 +928,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 },
                 produce = { events ->
-                    loop.run(goal, events, files.map(PromptAttachment::asMessage))
+                    loop.run(goal, events, attachmentMessages)
                 },
             )
             if (!finishedEmitted.get() && loopAnswer.isNotBlank()) {
@@ -934,7 +1012,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 .forEach(interactive::register)
         }
         if (personalMemory.isRecallEnabled()) interactive.register(MemorySearchTool(personalMemory))
-        val planTools = setOf("memory_search", "workspace_list", "workspace_read", "github_build_status", "get_time", "device_info", "read_screen", "list_store", "todo_read")
+        interactive.register(AttachmentReadTool(application, fileLibrary, threadId))
+        val planTools = setOf("attachment_read", "memory_search", "workspace_list", "workspace_read", "github_build_status", "get_time", "device_info", "read_screen", "list_store", "todo_read")
         interactive.all().filter { mode != ExecutionMode.PLAN || (it.name in planTools && !it.sensitive) }.forEach { tool ->
             gated.register(PolicyGatedTool(tool, threadId, mode, db))
         }

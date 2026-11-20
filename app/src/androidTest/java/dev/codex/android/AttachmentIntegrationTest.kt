@@ -86,6 +86,8 @@ class AttachmentIntegrationTest {
                 compose.onNodeWithTag("attach_files").performClick()
                 compose.waitUntil(20_000) { compose.onAllNodesWithTag("attachment_page.pdf").fetchSemanticsNodes().isNotEmpty() }
                 compose.onNodeWithTag("attachment_sample.txt").assertIsDisplayed()
+                compose.onNodeWithTag("image_options").performClick()
+                compose.onNodeWithTag("inline_images_on").performClick()
                 assertEquals(0, server.requestCount)
                 server.enqueue(MockResponse().setHeader("Content-Type", "application/json").setBody(
                     """{"choices":[{"message":{"role":"assistant","content":"Files received"},"finish_reason":"stop"}]}""",
@@ -106,6 +108,7 @@ class AttachmentIntegrationTest {
                 Intents.release()
                 fixture.deleteRecursively()
                 runBlocking {
+                    keys.setImageMode("auto")
                     keys.clearApiKey()
                     keys.setBaseUrl("")
                     keys.setModel("")

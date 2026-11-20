@@ -1,24 +1,19 @@
 package dev.codex.android.attachments
 
-import android.content.ContentResolver
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
-import android.net.Uri
 import android.os.ParcelFileDescriptor
-import android.provider.OpenableColumns
 import android.util.Base64
 import dev.codex.android.api.ChatMessage
 import dev.codex.android.security.SecretScrubber
-import dev.codex.android.tools.WorkspaceFileTools
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
 import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
-import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -29,68 +24,43 @@ private const val MAX_IMAGE_BYTES = 2 * 1024 * 1024
 private const val MAX_PDF_BYTES = 8 * 1024 * 1024
 private const val PDF_PAGES = 3
 
-internal data class PromptAttachment(
-    val id: String = UUID.randomUUID().toString(),
-    val name: String,
-    val detail: String,
-    val text: String? = null,
-    val images: List<String> = emptyList(),
-) {
-    fun asMessage() = ChatMessage("user", "Attached file: $name ($detail)\n" +
-        (text ?: "The following images are the attachment contents."), imageUrls = images)
+internal data class PromptAttachment(val original: ManagedFile) {
+    val id get() = original.id
+    val name get() = original.name
+    val detail get() = "${original.bytes} bytes"
 }
 
-internal class AttachmentReader(private val context: Context) {
-    suspend fun read(uri: Uri): PromptAttachment = withContext(Dispatchers.IO) {
-        require(uri.scheme == ContentResolver.SCHEME_CONTENT) { "Choose a file from Android Files." }
-        val resolver = context.contentResolver
-        val name = runCatching {
-            resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
-                if (cursor.moveToFirst()) cursor.getString(0) else null
+internal class AttachmentReader(private val context: Context, private val library: FileLibrary) {
+    suspend fun message(entry: ManagedFile, imagesEnabled: Boolean): ChatMessage = withContext(Dispatchers.IO) {
+        val file = library.resolve(entry)
+        val header = file.inputStream().use { it.readNBytesCompat(16) }
+        val mime = attachmentImageMime(header)
+        val pdf = header.toString(Charsets.US_ASCII).startsWith("%PDF-")
+        val path = entry.vmPath
+        val details = StringBuilder("Attached file: ${entry.name} (${entry.bytes} bytes). Full original in Linux workspace: $path. " +
+            "Use attachment_read with id ${entry.id} for paged UTF-8 or PDF text. Approved shell_exec/Python can inspect the original for other formats.")
+        val images = if (!imagesEnabled) emptyList() else runCatching {
+            when {
+                mime != null && entry.bytes <= MAX_IMAGE_BYTES -> {
+                    val data = file.inputStream().use { readBounded(it, MAX_IMAGE_BYTES, "Image too large.") }
+                    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeByteArray(data, 0, data.size, bounds)
+                    if (bounds.outWidth in 1..8192 && bounds.outHeight in 1..8192) listOf(dataUrl(mime, data)) else emptyList()
+                }
+                pdf && entry.bytes <= MAX_PDF_BYTES -> file.inputStream().use { renderPdf(it, entry.name) }
+                else -> emptyList()
             }
-        }.getOrNull().let { safeName(it ?: "Attachment") }
-        resolver.openInputStream(uri)?.buffered()?.use { read(it, name) }
-            ?: error("Could not open $name.")
-    }
-
-    suspend fun readWorkspace(workspace: WorkspaceFileTools, path: String): PromptAttachment = withContext(Dispatchers.IO) {
-        val file = workspace.resolveSafe(path)
-        require(file.isFile) { "Workspace file ${safeName(path)} no longer exists." }
-        val name = safeName(path)
-        file.inputStream().buffered().use { read(it, name) }
-    }
-
-    private fun read(stream: InputStream, name: String): PromptAttachment {
-        stream.mark(32)
-        val header = ByteArray(16)
-        var offset = 0
-        while (offset < header.size) {
-            val size = stream.read(header, offset, header.size - offset)
-            if (size <= 0) break
-            offset += size
+        }.getOrDefault(emptyList())
+        if (images.isNotEmpty()) details.append(if (pdf) " Preview: first ${images.size} PDF pages." else " Image included inline.")
+        else if (pdf || mime != null) details.append(" No inline image was sent for this file.")
+        if (!pdf && mime == null && entry.bytes <= MAX_TEXT_BYTES) {
+            val text = file.inputStream().use { decodeAttachmentText(readBounded(it, MAX_TEXT_BYTES, "File changed.")) }
+            if (!text.isNullOrBlank()) details.append("\nText preview:\n${SecretScrubber.scrub(text.take(MAX_TEXT_CHARS))}")
         }
-        stream.reset()
-        val imageType = attachmentImageMime(header.copyOf(offset))
-        return when {
-            imageType != null -> {
-                val data = readBounded(stream, MAX_IMAGE_BYTES, "$name exceeds the 2 MB image limit.")
-                val info = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                BitmapFactory.decodeByteArray(data, 0, data.size, info)
-                require(info.outWidth in 1..8192 && info.outHeight in 1..8192) { "$name is unreadable or its dimensions are too large." }
-                PromptAttachment(name = name, detail = "Image · vision model required", images = listOf(dataUrl(imageType, data)))
-            }
-            String(header, 0, offset, Charsets.US_ASCII).startsWith("%PDF-") -> renderPdf(stream, name)
-            else -> {
-                val data = readBounded(stream, MAX_TEXT_BYTES, "$name is too large for a text attachment. Choose a smaller excerpt.")
-                val text = decodeAttachmentText(data) ?: error("$name is not supported. Choose UTF-8 text, JPEG, PNG, WebP or PDF.")
-                require(text.isNotBlank()) { "$name is empty." }
-                require(text.length <= MAX_TEXT_CHARS) { "$name exceeds $MAX_TEXT_CHARS characters. Choose a smaller excerpt." }
-                PromptAttachment(name = name, detail = "Text · ${text.length} characters", text = SecretScrubber.scrub(text))
-            }
-        }
+        ChatMessage("user", details.toString(), imageUrls = images)
     }
 
-    private fun renderPdf(stream: InputStream, name: String): PromptAttachment {
+    private fun renderPdf(stream: InputStream, name: String): List<String> {
         val temp = File.createTempFile("prompt-pdf-", ".pdf", context.cacheDir)
         try {
             temp.writeBytes(readBounded(stream, MAX_PDF_BYTES, "$name exceeds the 8 MB PDF limit."))
@@ -118,7 +88,7 @@ internal class AttachmentReader(private val context: Context) {
                             } finally { bitmap.recycle() }
                         }
                     }
-                    return PromptAttachment(name = name, detail = "PDF · $count of ${pdf.pageCount} pages · vision required", images = images)
+                    return images
                 }
             }
         } finally { temp.delete() }
@@ -153,3 +123,14 @@ internal fun attachmentImageMime(bytes: ByteArray): String? = when {
 }
 
 private fun dataUrl(mime: String, bytes: ByteArray) = "data:$mime;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP)
+
+internal fun InputStream.readNBytesCompat(limit: Int): ByteArray {
+    val buffer = ByteArray(limit)
+    var used = 0
+    while (used < limit) {
+        val count = read(buffer, used, limit - used)
+        if (count <= 0) break
+        used += count
+    }
+    return buffer.copyOf(used)
+}

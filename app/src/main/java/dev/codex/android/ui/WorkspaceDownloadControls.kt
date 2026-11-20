@@ -47,7 +47,7 @@ import kotlinx.coroutines.withContext
 internal data class WorkspaceDownload(val start: (String) -> Unit, val busy: Boolean, val status: String?, val failed: Boolean)
 
 @Composable
-internal fun rememberWorkspaceDownload(workspace: WorkspaceFileTools?): WorkspaceDownload {
+internal fun rememberWorkspaceDownload(workspace: WorkspaceFileTools?, resolve: ((String) -> java.io.File)? = null): WorkspaceDownload {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var pending by rememberSaveable { mutableStateOf<String?>(null) }
@@ -58,12 +58,12 @@ internal fun rememberWorkspaceDownload(workspace: WorkspaceFileTools?): Workspac
         val path = pending
         pending = null
         val uri = result.data?.data
-        if (result.resultCode != Activity.RESULT_OK || uri == null || path == null || workspace == null) return@rememberLauncherForActivityResult
+        if (result.resultCode != Activity.RESULT_OK || uri == null || path == null || (workspace == null && resolve == null)) return@rememberLauncherForActivityResult
         busy = true
         scope.launch {
             try {
                 withContext(Dispatchers.IO) {
-                    val file = resolveWorkspaceDownload(workspace, path)
+                    val file = resolve?.invoke(path) ?: resolveWorkspaceDownload(requireNotNull(workspace), path)
                     require(uri.scheme == "content") { "Choose a destination from Android Files." }
                     Files.newInputStream(file.toPath(), LinkOption.NOFOLLOW_LINKS).use { source ->
                         val destination = context.contentResolver.openOutputStream(uri, "wt") ?: error("Could not open the save destination.")
@@ -84,7 +84,7 @@ internal fun rememberWorkspaceDownload(workspace: WorkspaceFileTools?): Workspac
         }
     }
     return WorkspaceDownload(start = { path ->
-        if (workspace != null && pending == null && !busy) {
+        if ((workspace != null || resolve != null) && pending == null && !busy) {
             status = null
             pending = path
             val name = path.substringAfterLast('/')
@@ -129,11 +129,15 @@ internal fun WorkspaceFileCard(path: String, download: WorkspaceDownload, modifi
 }
 
 @Composable
-internal fun WorkspaceFilesDialog(workspace: WorkspaceFileTools, download: WorkspaceDownload, onClose: () -> Unit) {
+internal fun WorkspaceFilesDialog(workspace: WorkspaceFileTools, download: WorkspaceDownload, canDelete: Boolean, onClose: () -> Unit) {
     var files by remember { mutableStateOf<List<String>?>(null) }
     var failed by remember { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
-    LaunchedEffect(workspace) {
+    val scope = rememberCoroutineScope()
+    var revision by remember { mutableStateOf(0) }
+    var confirmation by remember { mutableStateOf<String?>(null) }
+    var deletionStatus by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(workspace, revision) {
         try { files = withContext(Dispatchers.IO) { downloadIndex(workspace).keys.sorted() } }
         catch (e: CancellationException) { throw e }
         catch (_: Exception) { failed = true }
@@ -152,12 +156,34 @@ internal fun WorkspaceFilesDialog(workspace: WorkspaceFileTools, download: Works
                     matches == null -> Text("Reading workspace…")
                     matches.isEmpty() -> Text(if (query.isBlank()) "No downloadable files in this workspace." else "No files match the filter.")
                     else -> LazyColumn(Modifier.heightIn(max = 300.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        items(matches, key = { it }) { path -> WorkspaceFileCard(path, download) }
+                        items(matches, key = { it }) { path ->
+                            Column {
+                                WorkspaceFileCard(path, download)
+                                if (canDelete) TextButton(onClick = { confirmation = path }) { Text("Delete file") }
+                            }
+                        }
                     }
                 }
                 DownloadStatus(download)
+                deletionStatus?.let { Text(it) }
             }
         },
         confirmButton = { TextButton(onClick = onClose) { Text("Done") } },
     )
+    confirmation?.let { path ->
+        AlertDialog(onDismissRequest = { confirmation = null }, title = { Text("Delete $path?") },
+            text = { Text("This deletes the workspace copy. Exported copies and library files are not affected.") },
+            confirmButton = { TextButton(enabled = canDelete, onClick = {
+                confirmation = null
+                scope.launch {
+                    try {
+                        withContext(Dispatchers.IO) { Files.delete(resolveWorkspaceDownload(workspace, path).toPath()) }
+                        deletionStatus = "Deleted $path."
+                    } catch (e: CancellationException) { throw e }
+                    catch (_: Exception) { deletionStatus = "Could not delete $path." }
+                    revision++
+                }
+            }) { Text("Delete", color = MaterialTheme.colorScheme.error) } },
+            dismissButton = { TextButton(onClick = { confirmation = null }) { Text("Cancel") } })
+    }
 }

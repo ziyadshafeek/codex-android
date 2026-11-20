@@ -361,6 +361,7 @@ class AgentLoop(
                 )
                 return "Approval failed: ${e.message}"
             }
+            transcript("approval", tool.name, if (approved) "Approved" else "Denied")
             emitEvent(AgentEvent.ApprovalResolved(action, approved))
             if (!approved) {
                 return "The user denied this action."
