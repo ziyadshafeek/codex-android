@@ -118,11 +118,20 @@ private fun gitBranch(branch: String): String {
 }
 
 private fun sourcePath(path: String): String {
-    require(path.length in 1..240 && path.split('/').all { part ->
-        part.matches(Regex("[A-Za-z0-9_][A-Za-z0-9_.-]*")) &&
-            part.lowercase() !in setOf("local.properties", "gradle.properties", "key.properties", "secrets.properties") &&
-            !part.lowercase().endsWith(".keystore") && !part.lowercase().endsWith(".jks")
-    }) { "Use a regular relative source path (no hidden files, keys or private configuration)" }
+    require(path.length in 1..240) { "Use a regular relative source path (no hidden files, keys or private configuration)" }
+    val parts = path.split('/')
+    // Workflow files are CI config, not secrets: allow exactly
+    // `.github/workflows/<name>.yml|yaml` so the agent can publish a build
+    // workflow. Every other hidden path stays blocked.
+    val isWorkflowFile = parts.size == 3 && parts[0] == ".github" && parts[1] == "workflows" &&
+        parts[2].matches(Regex("[A-Za-z0-9_][A-Za-z0-9_.-]*\\.(yml|yaml)"))
+    if (!isWorkflowFile) {
+        require(parts.all { part ->
+            part.matches(Regex("[A-Za-z0-9_][A-Za-z0-9_.-]*")) &&
+                part.lowercase() !in setOf("local.properties", "gradle.properties", "key.properties", "secrets.properties") &&
+                !part.lowercase().endsWith(".keystore") && !part.lowercase().endsWith(".jks")
+        }) { "Use a regular relative source path (no hidden files, keys or private configuration)" }
+    }
     return path
 }
 
