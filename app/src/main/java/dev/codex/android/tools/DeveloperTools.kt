@@ -84,12 +84,17 @@ internal fun ToolRegistry.registerDeveloperTools(
         val (owner, repo) = githubRepository(repository)
         val branch = gitBranch(args.text("branch"))
         val runs = github.listRuns(owner, repo, branch, perPage = 4)
-        success(runs.joinToString("\n") { run ->
+        val lines = mutableListOf<String>()
+        for (run in runs) {
             val url = "https://github.com/$owner/$repo/actions/runs/${run.id}"
-            val artifacts = if (run.isSuccess) github.listArtifacts(owner, repo, run.id).filterNot { it.expired } else emptyList()
-            "${run.status}/${run.conclusion ?: "pending"} ${run.headSha.orEmpty().take(10)} $url" +
-                artifacts.joinToString("") { "\n${it.name}: $url/artifacts/${it.id}" }
-        }.ifBlank { "No runs found for $branch. A new dispatch may take a moment to appear." })
+            lines += "${run.status}/${run.conclusion ?: "pending"} ${run.headSha.orEmpty().take(10)} $url"
+            if (run.isSuccess) {
+                for (artifact in github.listArtifacts(owner, repo, run.id).filterNot { it.expired }) {
+                    lines += "${artifact.name}: $url/artifacts/${artifact.id}"
+                }
+            }
+        }
+        success(lines.joinToString("\n").ifBlank { "No runs found for $branch. A new dispatch may take a moment to appear." })
     })
 }
 
