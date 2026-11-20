@@ -83,27 +83,7 @@ import java.util.UUID
 class MainActivity : ComponentActivity() {
     private val viewModel: ChatViewModel by viewModels()
 
-    /**
-     * Real agent runner for daemon turns (the ChatViewModel AgentLoop
-     * pattern, via DefaultSubagentLoopFactory — see
-     * [DaemonAgentRunnerFactory]). Created once per activity lifetime.
-     */
-    private val daemonRunnerFactory: DaemonAgentRunnerFactory by lazy {
-        DaemonAgentRunnerFactory(application)
-    }
-
-    /**
-     * Headless local daemon (M8): created once per activity lifetime
-     * so a rotation never rebinds port 8787 with a fresh token while
-     * the old socket is still bound. Started in [onCreate] (IO).
-     */
-    private val localDaemon: LocalDaemon by lazy {
-        LocalDaemon(
-            applicationContext,
-            CodexDatabase.getInstance(applicationContext),
-            runnerFactory = daemonRunnerFactory,
-        )
-    }
+    private val localDaemon: LocalDaemon get() = PhoneDaemon.get(application)
 
     /**
      * Unified MCP hub (M8): registered at the DI root with the real
@@ -440,3 +420,15 @@ class MainActivity : ComponentActivity() {
 
 private fun ComposerMode.toExecutionMode(): ExecutionMode =
     if (this == ComposerMode.PLAN) ExecutionMode.PLAN else ExecutionMode.AUTO
+
+/** Keep one port and bearer token when Android recreates the activity. */
+private object PhoneDaemon {
+    private var instance: LocalDaemon? = null
+
+    @Synchronized
+    fun get(app: android.app.Application): LocalDaemon = instance ?: LocalDaemon(
+        app,
+        CodexDatabase.getInstance(app),
+        runnerFactory = DaemonAgentRunnerFactory(app),
+    ).also { instance = it }
+}

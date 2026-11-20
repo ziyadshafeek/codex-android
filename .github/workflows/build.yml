@@ -91,7 +91,7 @@ jobs:
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-34" "build-tools;34.0.0"
 
       - name: Build debug APK
-        run: ./gradlew assembleDebug --no-daemon
+        run: bash .github/scripts/gradle-ci.sh assembleDebug
 
       # The Linux terminal is dead on a real phone if any of the four
       # native libs is missing from the APK (libproot.so links libtalloc.so
@@ -110,7 +110,7 @@ jobs:
       - name: Run JVM unit tests and verify the production Alpine archive
         env:
           CODEX_CI_VERIFY_ALPINE: "1"
-        run: ./gradlew testDebugUnitTest --no-daemon
+        run: bash .github/scripts/gradle-ci.sh testDebugUnitTest
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
@@ -215,7 +215,7 @@ jobs:
           enable-hw-keyboard: true
           disable-animations: true
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
-          script: ./gradlew connectedDebugAndroidTest --no-daemon
+          script: bash .github/scripts/gradle-ci.sh connectedDebugAndroidTest
 
       - name: Upload test reports on failure
         if: failure()

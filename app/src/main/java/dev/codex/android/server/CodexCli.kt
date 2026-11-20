@@ -68,6 +68,12 @@ object CodexCli {
         set -eu
         SCRIPT_DIR="$(cd "$(dirname "${'$'}0")" && pwd)"
         ENV_FILE="/etc/codex/daemon.env"
+        case "${'$'}{1:-}" in
+          -h|--help)
+            echo "Usage: codex <run|threads|messages|stop|status> [args]"
+            exit 0
+            ;;
+        esac
         if [ ! -f "${'$'}ENV_FILE" ]; then
           ENV_FILE="${'$'}SCRIPT_DIR/daemon.env"
         fi
@@ -97,6 +103,22 @@ object CodexCli {
           echo "  codex status"
         }
 
+        daemon_get() {
+          if command -v curl >/dev/null 2>&1; then
+            curl --noproxy '*' -fsS "${'$'}BASE${'$'}1" -H "${'$'}AUTH"
+          else
+            /bin/busybox wget -Y off -qO- --header "${'$'}AUTH" "${'$'}BASE${'$'}1"
+          fi
+        }
+
+        daemon_post() {
+          if command -v curl >/dev/null 2>&1; then
+            curl --noproxy '*' -fsS -X POST "${'$'}BASE${'$'}1" -H "${'$'}AUTH" -H 'Content-Type: application/json' -d "${'$'}2"
+          else
+            /bin/busybox wget -Y off -qO- --header "${'$'}AUTH" --header 'Content-Type: application/json' --post-data "${'$'}2" "${'$'}BASE${'$'}1"
+          fi
+        }
+
         json_escape() {
           printf '%s' "${'$'}1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
         }
@@ -112,27 +134,27 @@ object CodexCli {
             else
               payload="$(printf '{"goal": "%s"}' "$(json_escape "${'$'}goal")")"
             fi
-            curl -sS -X POST "${'$'}BASE/v1/turn" -H "${'$'}AUTH" -H 'Content-Type: application/json' -d "${'$'}payload"
+            daemon_post /v1/turn "${'$'}payload"
             echo
             ;;
           threads)
-            curl -sS "${'$'}BASE/v1/threads" -H "${'$'}AUTH"
+            daemon_get /v1/threads
             echo
             ;;
           messages)
             thread="${'$'}{2:-}"
             if [ -z "${'$'}thread" ]; then usage; exit 2; fi
-            curl -sS "${'$'}BASE/v1/threads/${'$'}thread/messages" -H "${'$'}AUTH"
+            daemon_get "/v1/threads/${'$'}thread/messages"
             echo
             ;;
           stop)
             thread="${'$'}{2:-}"
             if [ -z "${'$'}thread" ]; then usage; exit 2; fi
-            curl -sS -X POST "${'$'}BASE/v1/stop" -H "${'$'}AUTH" -H 'Content-Type: application/json' -d "{\"threadId\": \"$(json_escape "${'$'}thread")\"}"
+            daemon_post /v1/stop "{\"threadId\": \"$(json_escape "${'$'}thread")\"}"
             echo
             ;;
           status)
-            curl -sS "${'$'}BASE/v1/health" -H "${'$'}AUTH"
+            daemon_get /v1/health
             echo
             ;;
           *)
