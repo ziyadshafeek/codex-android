@@ -50,6 +50,7 @@ class AgentLoop(
     private val sessionInstructions: String = "",
     private val recalledMemory: suspend (goal: String) -> String? = { null },
     private val soulMarkdown: () -> String? = { null },
+    private val transcript: suspend (kind: String, name: String, content: String) -> Unit = { _, _, _ -> },
 ) {
 
     /**
@@ -185,6 +186,8 @@ class AgentLoop(
                 return answer
             }
 
+            choice.text?.takeIf { it.isNotBlank() }?.let { transcript("intermediate", "assistant", it) }
+            for (call in choice.toolCalls) transcript("tool_call", call.function.name, call.function.arguments)
             // Execute the requested tool calls: consecutive read-only
             // calls run in parallel (bounded), sensitive calls act as
             // barriers. Results are reported back to the model strictly in
@@ -298,6 +301,7 @@ class AgentLoop(
         slots.forEachIndexed { index, slot ->
             val parsed = slot.parsed
             if (parsed == null) {
+                transcript("tool_result", slot.errorToolName, slot.errorText)
                 emitEvent(AgentEvent.Error(slot.error ?: CodexError.Unknown(slot.errorText)))
                 messages.add(
                     ChatMessage(
@@ -309,6 +313,7 @@ class AgentLoop(
                 )
             } else {
                 val outputText = outputBySlotIndex[index] ?: "(no output)"
+                transcript("tool_result", parsed.tool.name, outputText)
                 emitEvent(AgentEvent.ToolFinished(parsed.tool.name, outputText))
                 messages.add(
                     ChatMessage(

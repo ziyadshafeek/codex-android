@@ -22,6 +22,7 @@ import dev.codex.android.browser.browserTools
 import dev.codex.android.context.ConversationContext
 import dev.codex.android.context.buildConversationContext
 import dev.codex.android.context.historyBudget
+import dev.codex.android.context.transcriptRecorder
 import dev.codex.android.api.OkHttpOpenAiClient
 import dev.codex.android.ci.GitHubActionsEngine
 import dev.codex.android.linux.ProotShellEngine
@@ -225,6 +226,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _compacting = MutableStateFlow(false)
     val compacting: StateFlow<Boolean> = _compacting.asStateFlow()
+    private val _summaryProgress = MutableStateFlow(0)
+    internal val summaryProgress = _summaryProgress.asStateFlow()
+    private var summaryJob: Job? = null
+    fun cancelSummary() { summaryJob?.cancel() }
     @Volatile private var previewBrowser: VerificationBrowser? = null
 
     fun attachBrowser(browser: VerificationBrowser?) { previewBrowser = browser }
@@ -319,7 +324,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     (inSession + seeded).take(50)
                 }
                 // Chat restore keeps its old behaviour: newest 20 only.
-                val restore = recent.takeLast(20)
+                val restore = recent.filterNot { it.kind in setOf("tool_call", "tool_result", "intermediate") }.takeLast(20)
                 if (restore.isNotEmpty()) {
                     val restored = restore.map { stored ->
                         val role = when (stored.role) {
@@ -455,13 +460,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
         val model = keyStore.getModel()
         _compacting.value = true
-        viewModelScope.launch {
+        _summaryProgress.value = 0
+        summaryJob = viewModelScope.launch {
             try {
                 val db = CodexDatabase.getInstance(getApplication())
                 val client = OkHttpOpenAiClient(baseUrl = base, apiKey = key, model = model)
                 val conversation = ConversationContext(db)
                 val latest = conversation.compact(threadId, client, model, historyBudget(keyStore.contextTokens()),
-                    automatic = false, previous = conversation.latest(threadId))
+                    automatic = false, onProgress = { _summaryProgress.value = it })
                 if (latest == null) append(ChatUiMessage("system", "No new chat messages to summarise."))
                 else append(ChatUiMessage("system", latest.content, contextSummary = true))
             } catch (e: CancellationException) {
@@ -642,7 +648,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val db = CodexDatabase.getInstance(getApplication())
                 if (db.listThreads().none { it.id == threadId }) return@launch
-                val opened = db.getMessages(threadId).map { stored ->
+                val opened = db.getMessages(threadId, mostRecent = true).filterNot { it.kind in setOf("tool_call", "tool_result", "intermediate") }.map { stored ->
                     val role = when (stored.role) {
                         "user" -> "user"
                         "assistant" -> "assistant"
@@ -736,7 +742,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 // A rejected summary doesn't lose the transcript or block the main request.
             }
         }
-        val history = db.getMessages(threadId, limit = 128, mostRecent = true, kind = "text", conversationOnly = true)
+        val history = db.getMessages(threadId, limit = 128, mostRecent = true)
         val conversation = buildConversationContext(history, summary, goal, budget)
         val outputPaths = Collections.synchronizedSet(linkedSetOf<String>())
         val soul = personalMemory.soulForAgent()
@@ -753,6 +759,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 if (it != null && activeThreadId.value == threadId) append(ChatUiMessage("system", "Using relevant saved notes"))
             } },
             soulMarkdown = { soul },
+            transcript = transcriptRecorder(db, threadId),
             sessionInstructions = if (mode == ExecutionMode.PLAN) {
                 "Plan mode is read-only. Inspect with workspace_list and workspace_read; ask the user to switch to Build before changing files, running shell commands, or starting CI."
             } else {

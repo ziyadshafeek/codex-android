@@ -57,6 +57,7 @@ fun ChatScreen(
     val isRunning by viewModel.isRunning.collectAsState()
     val activeThreadId by viewModel.activeThreadId.collectAsState()
     val hasKey by viewModel.hasKey.collectAsState()
+    val summaryProgress by viewModel.summaryProgress.collectAsState()
     val compacting by viewModel.compacting.collectAsState()
     val rateLimitCountdown by viewModel.rateLimitCountdown.collectAsState()
     val download = rememberWorkspaceDownload(viewModel.workspaceFileTools)
@@ -277,10 +278,13 @@ fun ChatScreen(
             Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = { text = ""; viewModel.newChat() }, enabled = !isRunning && !compacting,
                     modifier = Modifier.testTag("chat_new")) { Text("New chat") }
-                TextButton(onClick = viewModel::compactChat, enabled = activeThreadId != null && !isRunning && !compacting,
-                    modifier = Modifier.testTag("chat_compact")) { Text(if (compacting) "Summarising…" else "Summarise") }
+                TextButton(onClick = if (compacting) viewModel::cancelSummary else viewModel::compactChat,
+                    enabled = activeThreadId != null && !isRunning,
+                    modifier = Modifier.testTag("chat_compact")) { Text(if (compacting) "Cancel summary" else "Summarise") }
                 if (text.isNotBlank()) Text("Draft ~${contextTokens(text)} tokens", style = MaterialTheme.typography.labelSmall)
             }
+            if (compacting) Text("Summarising ${if (summaryProgress == 0) "chat" else "section $summaryProgress"}…",
+                modifier = Modifier.padding(horizontal = 12.dp), style = MaterialTheme.typography.bodySmall)
             AttachmentControls(viewModel, enabled = !isRunning && !compacting, modifier = Modifier.padding(horizontal = 12.dp),
                 onOpenWorkspace = { showFiles = true })
             DownloadStatus(download, Modifier.padding(horizontal = 12.dp))

@@ -3,6 +3,7 @@ package dev.codex.android.subagents
 import android.content.Context
 import dev.codex.android.memory.MemorySearchTool
 import dev.codex.android.memory.PersonalMemory
+import dev.codex.android.context.transcriptRecorder
 import dev.codex.android.agent.AgentEvent
 import dev.codex.android.agent.AgentLoop
 import dev.codex.android.agent.AgentRuntime
@@ -173,6 +174,7 @@ class DefaultSubagentLoopFactory(
             skills = skills,
             recalledMemory = memory::recall,
             soulMarkdown = memory::soulForAgent,
+            transcript = transcriptRecorder(CodexDatabase.getInstance(appContext), threadId),
         )
         // Same event → TurnContext mapping as ChatViewModel.runAgentTurn:
         // one step per plan / model reply / tool start; approvals go through
