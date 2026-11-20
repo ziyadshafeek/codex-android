@@ -51,11 +51,14 @@ class AttachmentIntegrationTest {
         bmp.eraseColor(Color.GREEN)
         image.outputStream().use { assertTrue(bmp.compress(Bitmap.CompressFormat.PNG, 100, it)) }
         bmp.recycle()
-        PdfDocument().use { doc ->
+        val doc = PdfDocument()
+        try {
             val page = doc.startPage(PdfDocument.PageInfo.Builder(280, 280, 1).create())
             page.canvas.drawText("PDF fixture", 12f, 25f, Paint())
             doc.finishPage(page)
-            pdf.outputStream().use(doc::writeTo)
+            pdf.outputStream().use { doc.writeTo(it) }
+        } finally {
+            doc.close()
         }
         val uris = listOf(text, image, pdf).map { FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", it) }
         MockWebServer().use { server ->
