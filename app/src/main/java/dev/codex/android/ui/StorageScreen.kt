@@ -78,7 +78,7 @@ import kotlinx.coroutines.withContext
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun StorageScreen(
+internal fun StorageScreen(
     workspace: WorkspaceFileTools,
     fileLibrary: FileLibrary,
     rootfsManager: RootfsManager,
