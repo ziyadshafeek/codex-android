@@ -89,3 +89,9 @@ The design adapts the [OpenClaw memory model](https://github.com/openclaw/opencl
 **Attach files** opens Android Files in both chat and Workbench. In Workbench, `@file` and the Files tab also attach workspace files. Send up to three files with a prompt: UTF-8 text (6,000 characters per file), JPEG/PNG/WebP (2 MB each), or PDFs (8 MB, first three pages rendered on-device). Images and PDFs require a vision-capable model. Files are read locally first; only send shares contents with the configured provider. Chat history retains the filenames, not the original attachment payload; attach the file again for a later turn that needs its contents.
 
 With recall enabled, Codex preloads relevant saved notes and can use a read-only search to look up differently worded preferences or decisions. It applies **Soul.md** as the default style for each run, even if note recall is paused. Only you can write durable notes.
+
+### Download workspace outputs from chat
+
+Files written by the interactive agent appear as downloadable cards in the conversation. The card shows the relative **Workspace / …** location. Tap **Download**, then choose **Downloads** or another folder in Android Files. The download is a copy of the current saved file; editor drafts must be saved first. **Workspace files** beside **Attach files** lets you search for and download earlier outputs, and Workbench → Files also offers **Download**. Hidden files, common credential files and links outside the workspace are excluded. The file contents need not be sent to a model to download them.
+
+OpenCode desktop's composer stages attachments, its sessions include search and export commands, and its workspace offers a change-review timeline. This app now supports Android-native attach/download and already has Workbench files, a terminal, diffs, approvals and CI. Desktop drag-and-drop, cross-machine workspace sync, and exporting a complete session are not equivalent or included in this change.

@@ -70,7 +70,7 @@ class MemoryStore(context: Context) {
                 val rows = dbHelper.readableDatabase.let { db ->
                     db.query(
                         CodexDatabase.TABLE_MESSAGES,
-                        arrayOf("id", "role", "content", "created_at"),
+                        arrayOf("id", "role", "content", "created_at", "kind"),
                         null,
                         null,
                         null,
@@ -267,6 +267,7 @@ class MemoryStore(context: Context) {
         val roleIdx = getColumnIndexOrThrow("role")
         val contentIdx = getColumnIndexOrThrow("content")
         val createdIdx = getColumnIndexOrThrow("created_at")
+        val kindIdx = getColumnIndexOrThrow("kind")
         while (moveToNext()) {
             out.add(
                 StoredMessage(
@@ -274,6 +275,7 @@ class MemoryStore(context: Context) {
                     role = getString(roleIdx),
                     content = getString(contentIdx),
                     createdAtMillis = getLong(createdIdx),
+                    kind = getString(kindIdx) ?: "text",
                 ),
             )
         }

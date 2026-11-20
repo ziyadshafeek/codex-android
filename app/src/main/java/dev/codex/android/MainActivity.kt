@@ -295,8 +295,8 @@ class MainActivity : ComponentActivity() {
                             id = index.toLong(),
                             threadId = activeThreadId ?: "",
                             role = msg.role,
-                            kind = if (msg.isError) "error" else "text",
-                            content = msg.text,
+                            kind = if (msg.artifactPath != null) "artifact" else if (msg.isError) "error" else "text",
+                            content = msg.artifactPath ?: msg.text,
                             createdAt = System.currentTimeMillis(),
                         )
                     }

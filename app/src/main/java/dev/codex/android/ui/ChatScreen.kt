@@ -59,6 +59,9 @@ fun ChatScreen(
     val hasKey by viewModel.hasKey.collectAsState()
     val compacting by viewModel.compacting.collectAsState()
     val rateLimitCountdown by viewModel.rateLimitCountdown.collectAsState()
+    val download = rememberWorkspaceDownload(viewModel.workspaceFileTools)
+    var showFiles by remember { mutableStateOf(false) }
+    if (showFiles) WorkspaceFilesDialog(viewModel.workspaceFileTools, download, onClose = { showFiles = false })
     val attaching by viewModel.attaching.collectAsState()
     val listState = rememberLazyListState()
     var text by remember(activeThreadId) { mutableStateOf("") }
@@ -191,6 +194,11 @@ fun ChatScreen(
                     .testTag("chat_messages")
             ) {
                 items(messages) { message ->
+                    val path = message.artifactPath
+                    if (path != null) {
+                        WorkspaceFileCard(path, download, Modifier.padding(vertical = 4.dp))
+                        return@items
+                    }
                     val displayText = if (message.isError) "⚠ ${message.text}" else message.text
                     when (message.role) {
                         "user" -> {
@@ -273,7 +281,9 @@ fun ChatScreen(
                     modifier = Modifier.testTag("chat_compact")) { Text(if (compacting) "Summarising…" else "Summarise") }
                 if (text.isNotBlank()) Text("Draft ~${contextTokens(text)} tokens", style = MaterialTheme.typography.labelSmall)
             }
-            AttachmentControls(viewModel, enabled = !isRunning && !compacting, modifier = Modifier.padding(horizontal = 12.dp))
+            AttachmentControls(viewModel, enabled = !isRunning && !compacting, modifier = Modifier.padding(horizontal = 12.dp),
+                onOpenWorkspace = { showFiles = true })
+            DownloadStatus(download, Modifier.padding(horizontal = 12.dp))
             Row(
                 modifier = Modifier
                     .fillMaxWidth()

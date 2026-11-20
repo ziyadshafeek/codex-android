@@ -12,6 +12,7 @@ data class StoredMessage(
     val role: String,
     val content: String,
     val createdAtMillis: Long,
+    val kind: String = "text",
 )
 
 /**

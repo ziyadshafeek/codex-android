@@ -26,7 +26,9 @@ import dev.codex.android.attachments.MAX_ATTACHMENTS
 
 /** The same draft and Android file picker are available in phone chat and Workbench. */
 @Composable
-internal fun AttachmentControls(viewModel: ChatViewModel, enabled: Boolean, modifier: Modifier = Modifier) {
+internal fun AttachmentControls(viewModel: ChatViewModel, enabled: Boolean, modifier: Modifier = Modifier,
+    onOpenWorkspace: (() -> Unit)? = null,
+) {
     val attachments by viewModel.attachments.collectAsState()
     val loading by viewModel.attaching.collectAsState()
     val error by viewModel.attachmentError.collectAsState()
@@ -38,9 +40,12 @@ internal fun AttachmentControls(viewModel: ChatViewModel, enabled: Boolean, modi
                 modifier = Modifier.testTag("attach_files")) {
                 Text(if (loading) "Reading files…" else "Attach files")
             }
-            if (attachments.isNotEmpty()) Text("${attachments.size}/$MAX_ATTACHMENTS · Sent with your next prompt",
-                style = MaterialTheme.typography.labelSmall)
+            if (onOpenWorkspace != null) TextButton(onClick = onOpenWorkspace, modifier = Modifier.testTag("chat_workspace_files")) {
+                Text("Workspace files")
+            }
         }
+        if (attachments.isNotEmpty()) Text("${attachments.size}/$MAX_ATTACHMENTS · Sent with your next prompt",
+            style = MaterialTheme.typography.labelSmall)
         if (attachments.isNotEmpty()) Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             attachments.forEach { file ->
                 InputChip(selected = true, onClick = { viewModel.removeAttachment(file.id) }, enabled = enabled,

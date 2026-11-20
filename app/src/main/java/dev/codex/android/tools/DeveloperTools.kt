@@ -20,6 +20,7 @@ internal fun ToolRegistry.registerDeveloperTools(
     shell: suspend (String) -> ShellResult,
     github: GitHubActionsEngine,
     repository: () -> String?,
+    onWorkspaceWrite: (String) -> Unit = {},
 ) {
     register(developerTool("workspace_list", "List the source files in the phone workspace.", false) {
         val files = workspace.listFiles().filter { runCatching { sourcePath(it) }.isSuccess }
@@ -39,7 +40,9 @@ internal fun ToolRegistry.registerDeveloperTools(
         val file = workspace.regularSource(path)
         require(content.length <= 150_000 && file.length() <= 150_000) { "File exceeds the tool's size limit" }
         require(SecretScrubber.scrub(content) == content) { "Do not put credentials in workspace source" }
-        success(workspace.writeFile(path, content))
+        val result = workspace.writeFile(path, content)
+        onWorkspaceWrite(path)
+        success(result)
     })
     register(developerTool("shell_exec", "Run one approved command in the on-device Linux workspace; no Android Accessibility needed. Use GitHub Actions for Gradle builds.", true,
         "command" to "Exact shell command (working directory /workspace)") { args ->

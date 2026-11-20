@@ -10,6 +10,10 @@ import dev.codex.android.agent.AgentRuntime
 import dev.codex.android.agent.PendingApproval
 import dev.codex.android.agent.PlanStore
 import dev.codex.android.agent.requiresInAppReview
+import dev.codex.android.artifacts.changedWorkspaceOutputs
+import dev.codex.android.artifacts.downloadIndex
+import dev.codex.android.artifacts.isDownloadablePath
+import dev.codex.android.artifacts.resolveWorkspaceDownload
 import dev.codex.android.attachments.AttachmentReader
 import dev.codex.android.attachments.MAX_ATTACHMENTS
 import dev.codex.android.attachments.PromptAttachment
@@ -64,6 +68,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import java.io.File
 import java.util.UUID
+import java.util.Collections
 import java.util.concurrent.atomic.AtomicBoolean
 
 data class ChatUiMessage(
@@ -73,6 +78,7 @@ data class ChatUiMessage(
     /** Stable id so a restore can dedupe a message already on screen. */
     val id: String = UUID.randomUUID().toString(),
     val contextSummary: Boolean = false,
+    val artifactPath: String? = null,
 )
 // roles: "user", "assistant", "system"
 
@@ -321,7 +327,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             "assistant" -> "assistant"
                             else -> "system"
                         }
-                        ChatUiMessage(role, stored.content)
+                        ChatUiMessage(role, stored.content, artifactPath = stored.content.takeIf { stored.kind == "artifact" && isDownloadablePath(it) })
                     }
                     _messages.update { current ->
                         // A thread opened via Share/tile replaces the
@@ -642,7 +648,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         "assistant" -> "assistant"
                         else -> "system"
                     }
-                    ChatUiMessage(role, stored.content, contextSummary = stored.kind == "summary")
+                    ChatUiMessage(role, stored.content, contextSummary = stored.kind == "summary",
+                        artifactPath = stored.content.takeIf { stored.kind == "artifact" && isDownloadablePath(it) })
                 }
                 threadMutex.withLock {
                     openedThreadId = threadId
@@ -731,9 +738,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
         val history = db.getMessages(threadId, limit = 128, mostRecent = true, kind = "text", conversationOnly = true)
         val conversation = buildConversationContext(history, summary, goal, budget)
+        val outputPaths = Collections.synchronizedSet(linkedSetOf<String>())
+        val soul = personalMemory.soulForAgent()
+        if (soul != null && activeThreadId.value == threadId) append(ChatUiMessage("system", "Using Soul.md style"))
         val loop = AgentLoop(
             client = client,
-            tools = policyGatedRegistry(threadId, mode, db),
+            tools = policyGatedRegistry(threadId, mode, db) { path -> outputPaths.add(path) },
             gate = RuntimeToolApprovalGate(turn, threadId, mode, db),
             planStore = planStore,
             model = model,
@@ -742,7 +752,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             recalledMemory = { request -> personalMemory.recall(request).also {
                 if (it != null && activeThreadId.value == threadId) append(ChatUiMessage("system", "Using relevant saved notes"))
             } },
-            soulMarkdown = personalMemory::soulForAgent,
+            soulMarkdown = { soul },
             sessionInstructions = if (mode == ExecutionMode.PLAN) {
                 "Plan mode is read-only. Inspect with workspace_list and workspace_read; ask the user to switch to Build before changing files, running shell commands, or starting CI."
             } else {
@@ -863,6 +873,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             // persists what the user already saw; a memory failure must
             // never affect the chat.
             withContext(NonCancellable + Dispatchers.IO) {
+                for (path in synchronized(outputPaths) { outputPaths.toList() }.take(12)) {
+                    if (runCatching { resolveWorkspaceDownload(workspaceFileTools, path) }.isFailure) continue
+                    runCatching { db.appendMessage(TimelineMessage(threadId = threadId, role = "system", kind = "artifact", content = path)) }
+                    if (activeThreadId.value == threadId) append(ChatUiMessage("system", path, artifactPath = path))
+                }
                 try {
                     _messages.value.lastOrNull {
                         it.role == "assistant" && !it.isError
@@ -875,7 +890,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         return answer
     }
 
-    private fun policyGatedRegistry(threadId: String, mode: ExecutionMode, db: CodexDatabase): ToolRegistry {
+    private fun policyGatedRegistry(threadId: String, mode: ExecutionMode, db: CodexDatabase, onOutput: (String) -> Unit): ToolRegistry {
         val gated = ToolRegistry()
         val application = getApplication<Application>()
         val workspaceDir = File(application.filesDir, "workspace")
@@ -891,11 +906,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 when {
                     !File(nativeDir, "libproot.so").isFile -> ShellResult(127, "", "Packaged Linux runtime is unavailable for this device. Use the ARM64 phone APK.")
                     !RootfsBootstrap.ensure(application) -> ShellResult(127, "", "Linux setup failed. Open Workbench → Terminal and tap Retry.")
-                    else -> engine.shellExec(command, timeoutMs = 30_000)
+                    else -> {
+                        val before = withContext(Dispatchers.IO) { runCatching { downloadIndex(workspaceFileTools) }.getOrNull() }
+                        try { engine.shellExec(command, timeoutMs = 30_000) }
+                        finally {
+                            if (before != null) withContext(NonCancellable + Dispatchers.IO) {
+                                runCatching { changedWorkspaceOutputs(before, downloadIndex(workspaceFileTools)) }
+                                    .getOrDefault(emptyList()).forEach(onOutput)
+                            }
+                        }
+                    }
                 }
             },
             github = GitHubActionsEngine(tokenProvider = { token }),
             repository = { repo },
+            onWorkspaceWrite = onOutput,
         )
         previewBrowser?.let { browser ->
             browserTools(browser).filterNot { it.name in setOf("browser_eval", "browser_screenshot") }

@@ -15,6 +15,8 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.performTextInput
 import androidx.core.content.FileProvider
 import androidx.test.espresso.intent.Intents
@@ -110,4 +112,76 @@ class AttachmentIntegrationTest {
             }
         }
     }
+
+    @Test fun generatedWorkspaceFileDownloadsFromChatAsExactBytes() {
+        val context = compose.activity.applicationContext
+        val keys = KeyStore(context)
+        val name = "generated-attachment-test.html"
+        val html = "<!doctype html><h1>Saved through Android Files</h1>"
+        val source = File(context.filesDir, "workspace/$name")
+        val destination = File(context.filesDir, "builds/export-test.html")
+        destination.parentFile?.mkdirs()
+        val targetUri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", destination)
+        MockWebServer().use { server ->
+            server.start(InetAddress.getByName("127.0.0.1"), 0)
+            Intents.init()
+            try {
+                compose.waitUntil(30_000) {
+                    compose.onAllNodesWithTag("onboarding_skip").fetchSemanticsNodes().isNotEmpty() ||
+                        compose.onAllNodesWithTag("chat_input").fetchSemanticsNodes().isNotEmpty()
+                }
+                if (compose.onAllNodesWithTag("onboarding_skip").fetchSemanticsNodes().isNotEmpty()) {
+                    compose.onNodeWithTag("onboarding_skip").performClick()
+                }
+                compose.onNodeWithText("Settings").performClick()
+                compose.onNodeWithTag("settings_base_url").performTextInput("http://127.0.0.1:${server.port}/v1")
+                compose.onNodeWithTag("settings_api_key").performTextInput("test-key-attachments")
+                compose.onNodeWithTag("settings_save").performClick()
+                compose.onNodeWithText("Back").performClick()
+                val arguments = org.json.JSONObject().put("path", name).put("content", html).toString()
+                val call = org.json.JSONObject().put("id", "call_write").put("type", "function")
+                    .put("function", org.json.JSONObject().put("name", "workspace_write").put("arguments", arguments))
+                val choice = org.json.JSONObject().put("finish_reason", "tool_calls")
+                    .put("message", org.json.JSONObject().put("role", "assistant").put("tool_calls", org.json.JSONArray().put(call)))
+                server.enqueue(MockResponse().setHeader("Content-Type", "application/json").setBody(
+                    org.json.JSONObject().put("choices", org.json.JSONArray().put(choice)).toString(),
+                ))
+                server.enqueue(MockResponse().setHeader("Content-Type", "application/json").setBody(
+                    """{"choices":[{"message":{"role":"assistant","content":"HTML file ready"},"finish_reason":"stop"}]}""",
+                ))
+                compose.onNodeWithTag("chat_input").performTextInput("Create a downloadable HTML file")
+                compose.onNodeWithTag("chat_send").performClick()
+                compose.waitUntil(20_000) { compose.onAllNodesWithText("Allow").fetchSemanticsNodes().isNotEmpty() }
+                assertFalse(source.exists())
+                compose.onNodeWithText("Allow").performClick()
+                compose.waitUntil(20_000) { source.isFile && compose.onAllNodesWithTag("chat_stop").fetchSemanticsNodes().isEmpty() }
+                compose.onNodeWithTag("chat_messages").performScrollToNode(hasTestTag("workspace_output_$name"))
+                Intents.intending(hasAction(Intent.ACTION_CREATE_DOCUMENT)).respondWith(ActivityResult(Activity.RESULT_OK, Intent().apply {
+                    data = targetUri
+                    addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                }))
+                compose.onNodeWithTag("download_$name").performClick()
+                compose.waitUntil(15_000) { compose.onAllNodesWithTag("workspace_download_status").fetchSemanticsNodes().isNotEmpty() }
+                assertEquals(html, destination.readText())
+                assertEquals(2, server.requestCount)
+
+                compose.onNodeWithTag("chat_workspace_files").performClick()
+                compose.waitUntil(15_000) { compose.onAllNodesWithTag("workspace_file_filter").fetchSemanticsNodes().isNotEmpty() }
+                compose.onNodeWithTag("workspace_file_filter").performTextInput("generated-attachment-test")
+                compose.onNodeWithText("Done").performClick()
+            } finally {
+                Intents.release()
+                source.delete()
+                destination.delete()
+                runBlocking {
+                    keys.clearApiKey()
+                    keys.setBaseUrl("")
+                    keys.setModel("")
+                    MemoryStore(context).clearMessages()
+                    PlanStore(context).clear()
+                }
+            }
+        }
+    }
+
 }
