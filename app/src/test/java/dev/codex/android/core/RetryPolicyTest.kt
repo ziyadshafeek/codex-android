@@ -3,6 +3,7 @@ package dev.codex.android.core
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 
@@ -104,5 +105,79 @@ class RetryPolicyTest {
             // Expected: cancellation is never retried or swallowed.
         }
         assertEquals("Cancellation must not be retried", 1, attempts)
+    }
+
+    @Test
+    fun rateLimit_waitsOutRetryAfterInsteadOfBackoff() = runBlocking {
+        // The bug: a RateLimit(1s) was retried after the ~1ms backoff,
+        // burning the attempt while the limit was still in force.
+        // The wait must be the server's Retry-After, not the backoff.
+        var attempts = 0
+        val reportedDelays = mutableListOf<Long>()
+        val startMs = System.currentTimeMillis()
+        val result = withRetry(
+            policy = fastPolicy,
+            onRetryWait = { delayMs, _ -> reportedDelays += delayMs },
+        ) {
+            attempts++
+            if (attempts < 2) throw CodexError.RateLimit(retryAfterSeconds = 1L)
+            "ok"
+        }
+        val elapsedMs = System.currentTimeMillis() - startMs
+        assertEquals("ok", result)
+        assertEquals(2, attempts)
+        assertEquals("one retry wait before the successful attempt", 1, reportedDelays.size)
+        assertTrue(
+            "onRetryWait must report >= 1000ms, was ${reportedDelays[0]}",
+            reportedDelays[0] >= 1000L,
+        )
+        assertTrue("elapsed must be >= 1s, was $elapsedMs", elapsedMs >= 1000L)
+    }
+
+    @Test
+    fun rateLimitWait_isCappedAtSixtySeconds() {
+        // A server asking for 300s must not block the turn for 5 minutes.
+        // Pure computation — no real waiting.
+        assertEquals(
+            MAX_RATE_LIMIT_WAIT_MS,
+            rateLimitDelayMs(fastPolicy, attempt = 0, retryAfterSeconds = 300L),
+        )
+        assertEquals(
+            "a 60s ask is honoured in full",
+            60_000L,
+            rateLimitDelayMs(fastPolicy, attempt = 0, retryAfterSeconds = 60L),
+        )
+        assertEquals(
+            "a 1s ask beats the 1ms backoff",
+            1000L,
+            rateLimitDelayMs(fastPolicy, attempt = 0, retryAfterSeconds = 1L),
+        )
+        assertEquals(
+            "no Retry-After falls back to the backoff",
+            1L,
+            rateLimitDelayMs(fastPolicy, attempt = 0, retryAfterSeconds = null),
+        )
+    }
+
+    @Test
+    fun nonRateLimitRetry_keepsBackoffAndReportsIt() = runBlocking {
+        // Other retryable errors keep the existing exponential backoff;
+        // onRetryWait still reports the actual (backoff + jitter) delay.
+        val reportedDelays = mutableListOf<Long>()
+        var attempts = 0
+        val result = withRetry(
+            policy = fastPolicy,
+            onRetryWait = { delayMs, _ -> reportedDelays += delayMs },
+        ) {
+            attempts++
+            if (attempts < 2) throw CodexError.Network()
+            "ok"
+        }
+        assertEquals("ok", result)
+        assertEquals(1, reportedDelays.size)
+        assertTrue(
+            "network retry delay must stay within backoff + jitter, was ${reportedDelays[0]}",
+            reportedDelays[0] in 1L..261L,
+        )
     }
 }

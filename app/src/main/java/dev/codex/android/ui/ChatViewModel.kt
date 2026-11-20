@@ -40,7 +40,9 @@ import dev.codex.android.tools.WorkspaceFileTools
 import dev.codex.android.tools.registerDeveloperTools
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.coroutineScope
@@ -166,6 +168,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _activeThreadId = MutableStateFlow<String?>(null)
     val activeThreadId: StateFlow<String?> = _activeThreadId.asStateFlow()
 
+    /**
+     * Live rate-limit countdown (seconds remaining), shown above the
+     * chat input while the client waits out a 429 retry delay. Null
+     * when no rate-limit wait is in progress. Display-only: it never
+     * changes the retry behaviour — the client already waits the full
+     * delay before retrying.
+     */
+    private val _rateLimitCountdown = MutableStateFlow<Long?>(null)
+    val rateLimitCountdown: StateFlow<Long?> = _rateLimitCountdown.asStateFlow()
+
+    /** Ticker job driving [_rateLimitCountdown] down once per second. */
+    private var rateLimitTicker: Job? = null
+
     /** The codex.db thread row this chat sends into; created lazily. */
     private var currentThreadId: String? = null
     private val threadMutex = Mutex()
@@ -285,6 +300,40 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // Both halves are required: a key alone is not enough, since a
         // run still needs a base URL to call.
         _hasKey.value = keyStore.hasKey() && keyStore.getBaseUrl().isNotBlank()
+    }
+
+    /**
+     * Starts (or restarts) the live rate-limit countdown for a retry
+     * wait of [delayMs]. Any ticker already running is cancelled
+     * first, so a new wait always replaces the old countdown. The
+     * countdown shows the ceiling of the delay in whole seconds and
+     * ticks down once per second until it reaches 0, when it clears.
+     * A zero or negative delay shows nothing.
+     */
+    private fun startRateLimitCountdown(delayMs: Long) {
+        rateLimitTicker?.cancel()
+        val seconds = rateLimitCountdownSeconds(delayMs)
+        if (seconds <= 0L) {
+            rateLimitTicker = null
+            _rateLimitCountdown.value = null
+            return
+        }
+        _rateLimitCountdown.value = seconds
+        rateLimitTicker = viewModelScope.launch {
+            var remaining = seconds
+            while (remaining > 0L) {
+                delay(1000L)
+                remaining--
+                _rateLimitCountdown.value = if (remaining > 0L) remaining else null
+            }
+        }
+    }
+
+    /** Stops the countdown ticker, if any, and clears the banner. */
+    private fun clearRateLimitCountdown() {
+        rateLimitTicker?.cancel()
+        rateLimitTicker = null
+        _rateLimitCountdown.value = null
     }
 
     /** Sends a mid-turn instruction to the active run, if any. */
@@ -546,7 +595,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val history = db.getMessages(threadId, limit = 32, mostRecent = true)
         val summary = db.getMessages(threadId, 1, mostRecent = true, kind = "summary").lastOrNull()
         val conversation = contextMessages(history, summary, goal)
-        val client = OkHttpOpenAiClient(baseUrl = baseUrl, apiKey = apiKey, model = model)
+        val client = OkHttpOpenAiClient(
+            baseUrl = baseUrl,
+            apiKey = apiKey,
+            model = model,
+            onRateLimitWait = { delayMs -> startRateLimitCountdown(delayMs) },
+        )
         val loop = AgentLoop(
             client = client,
             tools = policyGatedRegistry(threadId, mode, db),
@@ -666,6 +720,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             )
             throw e
         } finally {
+            // No stale countdown may linger past the turn: the wait
+            // this turn was for is over (or the turn was stopped), so
+            // the banner goes away with the run.
+            clearRateLimitCountdown()
             // Persist the run's final assistant reply (never system or
             // error messages). NonCancellable so a stop/cancel still
             // persists what the user already saw; a memory failure must
@@ -763,6 +821,16 @@ private suspend fun recordAuditQuietly(
  * which publishes the pending action for the in-app dialog and suspends
  * until the runner bridge answers it.
  */
+/**
+ * Whole seconds shown for a rate-limit retry wait of [delayMs]:
+ * the delay rounded up to the next whole second, so even a 1ms wait
+ * shows 1s and a 31s Retry-After shows 31s. Never negative.
+ * Top-level (not a ChatViewModel member) so JVM tests can call it
+ * directly: see RateLimitCountdownTest.
+ */
+internal fun rateLimitCountdownSeconds(delayMs: Long): Long =
+    maxOf(0L, (delayMs + 999L) / 1000L)
+
 /**
  * True when a Finished answer should be appended as a new bubble: false
  * when the same text is already the last assistant message (AgentLoop

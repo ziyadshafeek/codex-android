@@ -57,6 +57,7 @@ fun ChatScreen(
     val activeThreadId by viewModel.activeThreadId.collectAsState()
     val hasKey by viewModel.hasKey.collectAsState()
     val compacting by viewModel.compacting.collectAsState()
+    val rateLimitCountdown by viewModel.rateLimitCountdown.collectAsState()
     val listState = rememberLazyListState()
     var text by remember(activeThreadId) { mutableStateOf("") }
 
@@ -243,6 +244,21 @@ fun ChatScreen(
                         .fillMaxWidth()
                         .padding(horizontal = 12.dp, vertical = 4.dp)
                         .testTag("no_key_banner"),
+                    textAlign = TextAlign.Center,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            // Rate-limit countdown: informational only — it never
+            // blocks the input, and it disappears when the wait ends.
+            val countdownSeconds = rateLimitCountdown
+            if (countdownSeconds != null) {
+                Text(
+                    text = "Rate limited — retrying in ${countdownSeconds}s",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                        .testTag("chat_rate_limit_countdown"),
                     textAlign = TextAlign.Center,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant

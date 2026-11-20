@@ -55,6 +55,14 @@ class OkHttpOpenAiClient(
     private val model: String,
     private val httpClient: OkHttpClient = defaultHttpClient(),
     private val retryPolicy: RetryPolicy = RetryPolicy(),
+    /**
+     * Called before a retry wait that follows a rate limit, with the
+     * delay in milliseconds that will actually be waited (the server's
+     * Retry-After, honoured up to a 60s cap). Only invoked for
+     * [CodexError.RateLimit] — never for network or timeout retries.
+     * Lets the UI show a live "retrying in Ns" countdown.
+     */
+    private val onRateLimitWait: ((Long) -> Unit)? = null,
 ) : OpenAiClient {
 
     companion object {
@@ -88,7 +96,12 @@ class OkHttpOpenAiClient(
         // Blocking OkHttp execute() + stream reads: confine to the IO
         // dispatcher — the agent runtime drives chat() from Default.
         return withContext(Dispatchers.IO) {
-            withRetry(policy = retryPolicy) {
+            withRetry(
+                policy = retryPolicy,
+                onRetryWait = { delayMs, error ->
+                    if (error is CodexError.RateLimit) onRateLimitWait?.invoke(delayMs)
+                },
+            ) {
                 chatOnce(messages, tools, effectiveModel, onPartialText)
             }
         }
