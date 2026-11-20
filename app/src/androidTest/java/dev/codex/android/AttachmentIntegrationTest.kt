@@ -15,6 +15,8 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.performTextInput
@@ -116,7 +118,7 @@ class AttachmentIntegrationTest {
                 val saved = library.list("library").filterNot { it.key in initialCopies }
                 assertEquals(listOf("sample.txt"), saved.map { it.name })
                 compose.waitForIdle()
-                compose.onNodeWithTag("open_file_library").performClick()
+                compose.onNodeWithTag("open_file_library").performSemanticsAction(SemanticsActions.OnClick)
                 compose.waitUntil(20_000) { compose.onAllNodesWithTag("file_library_list").fetchSemanticsNodes().isNotEmpty() }
                 compose.onNodeWithTag("file_library_list").performScrollToNode(hasTestTag("library_file_sample.txt"))
                 compose.onNodeWithTag("library_file_sample.txt").performClick()

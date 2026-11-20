@@ -346,7 +346,10 @@ fun ChatScreen(
                             // the active run instead of starting a new goal.
                             activeThreadId?.let { AgentRuntime.steer(it, text) }
                             text = ""
-                        } else if (viewModel.sendGoal(text)) text = ""
+                        } else if (viewModel.sendGoal(text)) {
+                            text = ""
+                            focusManager.clearFocus(force = true)
+                        }
                     },
                     enabled = !compacting && !attaching && text.isNotBlank() && (!isRunning || activeThreadId != null),
                     modifier = Modifier.padding(start = 8.dp).testTag("chat_send")
