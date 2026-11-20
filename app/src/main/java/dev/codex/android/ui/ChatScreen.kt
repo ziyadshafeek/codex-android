@@ -4,6 +4,9 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -55,6 +58,8 @@ fun ChatScreen(
     onOpenWorkbench: () -> Unit = {},
 ) {
     val messages by viewModel.messages.collectAsState()
+    val streamedText by viewModel.streamingText.collectAsState()
+    val stepStatus by viewModel.stepStatus.collectAsState()
     val isRunning by viewModel.isRunning.collectAsState()
     val activeThreadId by viewModel.activeThreadId.collectAsState()
     val hasKey by viewModel.hasKey.collectAsState()
@@ -66,7 +71,7 @@ fun ChatScreen(
     if (showFiles) WorkspaceFilesDialog(viewModel.workspaceFileTools, download, canDelete = !isRunning && !compacting, onClose = { showFiles = false })
     val attaching by viewModel.attaching.collectAsState()
     val listState = rememberLazyListState()
-    var text by remember(activeThreadId) { mutableStateOf("") }
+    var text by rememberSaveable { mutableStateOf("") }
     val focusManager = LocalFocusManager.current
     var showNewChat by remember { mutableStateOf(false) }
     if (showNewChat) NewChatFilesDialog(viewModel, activeThreadId, onClose = { showNewChat = false }, onStart = {
@@ -130,33 +135,23 @@ fun ChatScreen(
         }
     }
 
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.size - 1)
-        }
+    LaunchedEffect(messages.lastOrNull()?.id, streamedText.isNotEmpty()) {
+        val last = messages.lastIndex + if (streamedText.isNotEmpty()) 1 else 0
+        if (last >= 0) listState.scrollToItem(last)
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Codex") },
-                actions = {
-                    TextButton(onClick = onOpenHistory) {
-                        Text("History")
+                title = {
+                    Row(Modifier.horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = onOpenHistory) { Text("History", maxLines = 1) }
+                        TextButton(onClick = onOpenStore) { Text("Store", maxLines = 1) }
+                        TextButton(onClick = onOpenPreview) { Text("Preview", maxLines = 1) }
+                        TextButton(onClick = onOpenWorkbench) { Text("Workbench", maxLines = 1) }
                     }
-                    TextButton(onClick = onOpenStore) {
-                        Text("Store")
-                    }
-                    TextButton(onClick = onOpenPreview) {
-                        Text("Preview")
-                    }
-                    TextButton(onClick = onOpenWorkbench) {
-                        Text("Workbench")
-                    }
-                    TextButton(onClick = onOpenSettings) {
-                        Text("Settings")
-                    }
-                }
+                },
+                actions = { TextButton(onClick = onOpenSettings) { Text("Settings", maxLines = 1) } },
             )
         }
     ) { padding ->
@@ -166,7 +161,7 @@ fun ChatScreen(
                 .padding(padding)
                 .imePadding()
         ) {
-            if (messages.isEmpty()) {
+            if (messages.isEmpty() && streamedText.isEmpty() && !isRunning) {
                 // Empty state: example prompts fill the input, never send.
                 Box(
                     modifier = Modifier
@@ -254,6 +249,9 @@ fun ChatScreen(
                         }
                     }
                 }
+                if (streamedText.isNotEmpty()) item(key = "streamed_reply") {
+                    Text(streamedText, Modifier.fillMaxWidth().padding(vertical = 4.dp).testTag("chat_streamed_reply"))
+                }
             }
             } // end else (messages non-empty)
             if (!hasKey) {
@@ -291,6 +289,8 @@ fun ChatScreen(
                     modifier = Modifier.testTag("chat_compact")) { Text(if (compacting) "Cancel summary" else "Summarise") }
                 if (text.isNotBlank()) Text("Draft ~${contextTokens(text)} tokens", style = MaterialTheme.typography.labelSmall)
             }
+            if (isRunning && stepStatus.isNotBlank()) Text(stepStatus, modifier = Modifier.padding(horizontal = 12.dp).testTag("chat_step_status"),
+                style = MaterialTheme.typography.bodySmall)
             if (compacting) Text("Summarising ${if (summaryProgress == 0) "chat" else "section $summaryProgress"}…",
                 modifier = Modifier.padding(horizontal = 12.dp), style = MaterialTheme.typography.bodySmall)
             AttachmentControls(viewModel, enabled = !isRunning && !compacting, modifier = Modifier.padding(horizontal = 12.dp),
@@ -305,6 +305,7 @@ fun ChatScreen(
                 OutlinedTextField(
                     value = text,
                     onValueChange = { text = it },
+                    maxLines = 5,
                     placeholder = { Text("Ask Codex to do something…") },
                     modifier = Modifier.weight(1f).testTag("chat_input")
                 )

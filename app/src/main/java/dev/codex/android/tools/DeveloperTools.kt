@@ -1,6 +1,7 @@
 package dev.codex.android.tools
 
 import dev.codex.android.ci.GitHubActionsEngine
+import dev.codex.android.artifacts.resolveWorkspaceDownload
 import dev.codex.android.linux.ShellResult
 import dev.codex.android.security.SecretScrubber
 import java.io.File
@@ -32,6 +33,13 @@ internal fun ToolRegistry.registerDeveloperTools(
         val file = workspace.regularSource(path)
         require(file.isFile && file.length() <= 150_000) { "File is missing or exceeds the read limit: $path" }
         success(workspace.readFile(path).take(20_000))
+    })
+    register(developerTool("workspace_offer_download", "Show an existing workspace file as a Download card in chat. Use when the user asks to download, export, or save to Android Downloads. The user chooses the destination; this does not write outside the workspace.", false,
+        "path" to "Exact workspace-relative path") { args ->
+        val path = args.text("path").trim()
+        resolveWorkspaceDownload(workspace, path)
+        onWorkspaceWrite(path)
+        success("Download card ready for $path. Tell the user to tap Download and choose Downloads. The file has not yet been exported.")
     })
     register(developerTool("workspace_write", "Create or replace a source file in the workspace. Use this for custom apps, not the template store.", true,
         "path" to "Relative file path", "content" to "Complete UTF-8 text to save") { args ->

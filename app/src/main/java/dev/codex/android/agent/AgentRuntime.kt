@@ -318,6 +318,16 @@ object AgentRuntime {
             syncServiceNotification(appContext)
         }
 
+        /** Interactive progress follows model requests, not tool narration or text chunks. */
+        fun reportModelStep(step: Int, finishing: Boolean) {
+            updateThread(threadId) { it.copy(stepIndex = step, statusText = if (finishing) "Preparing progress summary…" else "Step $step/$maxSteps · Working…") }
+            syncServiceNotification(appContext)
+        }
+
+        fun clearAssistantDelta() {
+            updateThread(threadId) { it.copy(streamingAssistantText = "") }
+        }
+
         /** Append streamed token delta to the live assistant bubble. */
         fun emitAssistantDelta(delta: String) {
             updateThread(threadId) { it.copy(streamingAssistantText = it.streamingAssistantText + delta) }

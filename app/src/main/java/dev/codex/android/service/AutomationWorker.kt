@@ -363,6 +363,7 @@ class AutomationWorker(
                             is AgentEvent.PlanUpdated -> {
                                 // No message.
                             }
+                            is AgentEvent.AssistantDelta -> Unit
                             is AgentEvent.AssistantText -> {
                                 turn.nextStepOrThrow("Model reply")
                                 turn.emitAssistantDelta(event.text)

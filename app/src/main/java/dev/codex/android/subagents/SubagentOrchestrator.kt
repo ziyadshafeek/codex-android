@@ -185,6 +185,7 @@ class DefaultSubagentLoopFactory(
                 when (event) {
                     is AgentEvent.PlanCreated -> turn.nextStepOrThrow("Plan: ${event.plan.goal}")
                     is AgentEvent.PlanUpdated -> Unit
+                    is AgentEvent.AssistantDelta -> Unit
                     is AgentEvent.AssistantText -> {
                         turn.nextStepOrThrow("Model reply")
                         turn.emitAssistantDelta(event.text)

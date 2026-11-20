@@ -62,3 +62,22 @@ internal fun changedWorkspaceOutputs(before: Map<String, WorkspaceStamp>, after:
     after.entries.filter { (path, stamp) -> before[path] != stamp }
         .sortedWith(compareBy<Map.Entry<String, WorkspaceStamp>> { it.key in before }.thenByDescending { it.value.modified })
         .take(12).map { it.key }
+
+/** Only handle clear export requests locally, and never infer a file from multiple candidates. */
+internal fun requestedWorkspaceDownload(goal: String, recentPath: String?, lastAssistant: String?): String? {
+    if (!Regex("""(?i)\b(?:download|export|(?:save|copy)\b.{0,100}\bdownloads)\b""").containsMatchIn(goal)) return null
+    if (Regex("""(?i)(?:https?://|\b(?:don't|do not|never)\b)""").containsMatchIn(goal)) return null
+    val pathPattern = Regex("""(?<![\w./-])[\w-]+(?:/[\w.-]+)*\.[\w-]{1,20}\b""")
+    val explicit = pathPattern.findAll(goal).map { it.value }.distinct().toList()
+    if (explicit.isNotEmpty()) return explicit.singleOrNull()?.takeIf(::isDownloadablePath)
+    if (!Regex("""(?i)\b(it|that file|this file|the file)\b""").containsMatchIn(goal)) return null
+    val referenced = lastAssistant?.let { text ->
+        Regex("`([^`\\r\\n]+)`").findAll(text).map { it.groupValues[1] }
+            .filter { pathPattern.matches(it) && isDownloadablePath(it) }.distinct().toList()
+    }.orEmpty()
+    return when {
+        referenced.size == 1 -> referenced.single()
+        referenced.size > 1 -> null
+        else -> recentPath
+    }
+}

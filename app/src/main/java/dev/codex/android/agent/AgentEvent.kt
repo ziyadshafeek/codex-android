@@ -15,7 +15,10 @@ sealed class AgentEvent {
     /** The plan changed (a step started, finished, or failed). */
     data class PlanUpdated(val plan: Plan) : AgentEvent()
 
-    /** A piece of assistant text arrived (streamed or whole). */
+    /** An incremental chunk of the current in-flight reply. */
+    data class AssistantDelta(val text: String) : AgentEvent()
+
+    /** The provider completed an assistant message. */
     data class AssistantText(val text: String) : AgentEvent()
 
     /** A tool started executing. */

@@ -96,13 +96,19 @@ class OkHttpOpenAiClient(
         // Blocking OkHttp execute() + stream reads: confine to the IO
         // dispatcher — the agent runtime drives chat() from Default.
         return withContext(Dispatchers.IO) {
+            // A retry may replay the same prefix. Once it is visible, end the failed
+            // reply instead of joining text from two different attempts.
+            var published = false
             withRetry(
                 policy = retryPolicy,
+                isRetryable = { !published && (it is CodexError.Network || it is CodexError.RateLimit || it is CodexError.Timeout) },
                 onRetryWait = { delayMs, error ->
                     if (error is CodexError.RateLimit) onRateLimitWait?.invoke(delayMs)
                 },
             ) {
-                chatOnce(messages, tools, effectiveModel, onPartialText)
+                chatOnce(messages, tools, effectiveModel, onPartialText?.let { emit -> { delta: String ->
+                    if (delta.isNotEmpty()) { published = true; emit(delta) }
+                } })
             }
         }
     }
