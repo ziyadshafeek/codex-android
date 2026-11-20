@@ -23,6 +23,8 @@ import androidx.test.espresso.intent.Intents
 import androidx.test.espresso.intent.matcher.IntentMatchers.hasAction
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.codex.android.agent.PlanStore
+import dev.codex.android.attachments.FileLibrary
+import dev.codex.android.tools.WorkspaceFileTools
 import dev.codex.android.data.KeyStore
 import dev.codex.android.data.MemoryStore
 import java.io.File
@@ -44,6 +46,8 @@ class AttachmentIntegrationTest {
         val context = compose.activity.applicationContext
         val keys = KeyStore(context)
         val fixture = File(context.filesDir, "builds/attachment-fixtures").apply { mkdirs() }
+        val library = FileLibrary(context, WorkspaceFileTools(File(context.filesDir, "workspace")))
+        val initialCopies = library.list("library").map { it.key }.toSet()
         val text = File(fixture, "sample.txt").apply { writeText("The attachment contains the cedar token.") }
         val image = File(fixture, "image.png")
         val pdf = File(fixture, "page.pdf")
@@ -109,8 +113,12 @@ class AttachmentIntegrationTest {
                 compose.onNodeWithTag("keep_sample.txt").performClick()
                 compose.onNodeWithTag("new_chat_save_selected").performClick()
                 compose.waitUntil(15_000) { compose.onAllNodesWithText("Start a new chat?").fetchSemanticsNodes().isEmpty() }
+                val saved = library.list("library").filterNot { it.key in initialCopies }
+                assertEquals(listOf("sample.txt"), saved.map { it.name })
+                compose.waitForIdle()
                 compose.onNodeWithTag("open_file_library").performClick()
-                compose.waitUntil(15_000) { compose.onAllNodesWithTag("library_file_sample.txt").fetchSemanticsNodes().isNotEmpty() }
+                compose.waitUntil(20_000) { compose.onAllNodesWithTag("file_library_list").fetchSemanticsNodes().isNotEmpty() }
+                compose.onNodeWithTag("file_library_list").performScrollToNode(hasTestTag("library_file_sample.txt"))
                 compose.onNodeWithTag("library_file_sample.txt").performClick()
                 compose.onNodeWithText("Delete file").performClick()
                 compose.onNodeWithText("Delete", substring = false).performClick()
@@ -121,6 +129,7 @@ class AttachmentIntegrationTest {
                 Intents.release()
                 fixture.deleteRecursively()
                 runBlocking {
+                    for (entry in library.list("library").filterNot { it.key in initialCopies }) library.delete(entry)
                     keys.setImageMode("auto")
                     keys.clearApiKey()
                     keys.setBaseUrl("")

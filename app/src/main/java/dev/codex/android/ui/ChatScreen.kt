@@ -35,6 +35,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -66,6 +67,7 @@ fun ChatScreen(
     val attaching by viewModel.attaching.collectAsState()
     val listState = rememberLazyListState()
     var text by remember(activeThreadId) { mutableStateOf("") }
+    val focusManager = LocalFocusManager.current
     var showNewChat by remember { mutableStateOf(false) }
     if (showNewChat) NewChatFilesDialog(viewModel, activeThreadId, onClose = { showNewChat = false }, onStart = {
         text = ""
@@ -282,7 +284,7 @@ fun ChatScreen(
                 )
             }
             Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = { showNewChat = true }, enabled = !isRunning && !compacting && !attaching,
+                TextButton(onClick = { focusManager.clearFocus(force = true); showNewChat = true }, enabled = !isRunning && !compacting && !attaching,
                     modifier = Modifier.testTag("chat_new")) { Text("New chat") }
                 TextButton(onClick = if (compacting) viewModel::cancelSummary else viewModel::compactChat,
                     enabled = activeThreadId != null && !isRunning,

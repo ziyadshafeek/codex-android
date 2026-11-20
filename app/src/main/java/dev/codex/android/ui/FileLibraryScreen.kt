@@ -87,7 +87,7 @@ internal fun FileLibraryDialog(viewModel: ChatViewModel, canAttach: Boolean, onC
                 when {
                     matches == null -> Text("Reading files…")
                     matches.isEmpty() -> Text("No files match.")
-                    else -> LazyColumn(Modifier.heightIn(max = 215.dp)) {
+                    else -> LazyColumn(Modifier.heightIn(max = 215.dp).testTag("file_library_list")) {
                         items(matches, key = { it.key }) { entry ->
                             TextButton(onClick = { selected = entry }, modifier = Modifier.fillMaxWidth().testTag("library_file_${entry.name}")) {
                                 Column(Modifier.weight(1f)) {
