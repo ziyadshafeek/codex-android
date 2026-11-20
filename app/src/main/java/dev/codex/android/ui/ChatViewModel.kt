@@ -961,7 +961,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // Feed the workbench CTX meter with the same estimate the
         // history budget uses (conversation text + the goal itself).
         _contextUsage.value =
-            conversation.sumOf { contextTokens(it.content) }.toLong() to keyStore.contextTokens()
+            conversation.sumOf { contextTokens(it.content.orEmpty()) }.toLong() to keyStore.contextTokens()
         val loop = AgentLoop(
             client = client,
             tools = policyGatedRegistry(threadId, mode, db),

@@ -44,6 +44,13 @@ import kotlinx.serialization.json.putJsonObject
 private const val COMPUTER_USE_NOT_ENABLED_ERROR =
     "Accessibility service not enabled — enable Codex in Settings > Accessibility"
 
+/**
+ * System-only privileged-call action. There is no public
+ * `Intent.ACTION_CALL_PRIVILEGED` constant (the action is hidden in
+ * the SDK), so it is spelled out here for the send_intent guard.
+ */
+private const val ACTION_CALL_PRIVILEGED = "android.intent.action.CALL_PRIVILEGED"
+
 /** Swipes from (x1, y1) to (x2, y2): precise scrolls, dismissals, drags. */
 object SwipeTool : Tool {
     override val name: String = "swipe"
@@ -203,7 +210,7 @@ class SendIntentTool(private val context: Context) : Tool {
             )
         }
         if (action != null && (action == Intent.ACTION_CALL ||
-                action == Intent.ACTION_CALL_PRIVILEGED || action.endsWith(".CALL"))
+                action == ACTION_CALL_PRIVILEGED || action.endsWith(".CALL"))
         ) {
             return ToolResult(
                 ok = false,
