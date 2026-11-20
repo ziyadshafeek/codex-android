@@ -155,4 +155,18 @@ class SmokeTest {
         composeTestRule.onNodeWithText("Back").performClick()
         composeTestRule.onNodeWithTag("chat_input").assertIsDisplayed()
     }
+
+    @Test
+    fun automationsAndReviewInboxAreReachableFromSettings() {
+        skipOnboardingIfShown()
+        composeTestRule.onNodeWithText("Settings").performClick()
+        composeTestRule.onNodeWithTag("settings_automations").performScrollTo().performClick()
+        composeTestRule.onNodeWithText("Automations").assertIsDisplayed()
+        composeTestRule.onNodeWithText("New").performClick()
+        composeTestRule.onNodeWithText("New automation").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Back").performClick()
+        composeTestRule.onNodeWithText("Review inbox").performClick()
+        composeTestRule.onNodeWithText("Review Inbox").assertIsDisplayed()
+    }
+
 }

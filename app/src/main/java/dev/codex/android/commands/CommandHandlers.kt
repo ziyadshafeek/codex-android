@@ -589,9 +589,18 @@ object CommandHandlers {
 
     /** Pure summarise-prompt builder, JVM-testable. Transcript is capped so the prompt stays bounded. */
     internal fun buildSummaryPrompt(messages: List<TimelineMessage>, maxChars: Int = 12_000): String {
-        val transcript = messages
-            .joinToString("\n") { "${it.role}: ${it.content}" }
-            .take(maxChars)
+        val priorSummary = messages.firstOrNull()?.takeIf { it.kind == "summary" }
+            ?.let { "Summary: ${it.content.take(maxChars / 3)}\n" }.orEmpty()
+        var remaining = maxChars - priorSummary.length
+        val recent = mutableListOf<String>()
+        for (message in messages.asReversed()) {
+            if (message.kind == "summary") continue
+            if (remaining <= 0) break
+            val line = "${message.role}: ${message.content.take(2400)}".take(remaining)
+            recent += line
+            remaining -= line.length + 1
+        }
+        val transcript = priorSummary + recent.asReversed().joinToString("\n")
         return "Summarise the conversation below into a compact handoff note. " +
             "Keep the user's goal, key decisions, files changed, open questions, " +
             "and anything needed to continue. Be concise and factual; do not invent details.\n\n" +

@@ -3,6 +3,7 @@ package dev.codex.android.api
 import dev.codex.android.core.CodexError
 import dev.codex.android.core.withRetry
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -96,7 +97,17 @@ class ProviderService(
             .header("Authorization", "Bearer $trimmedKey")
             .build()
         try {
-            withRetry(isRetryable = { it is CodexError.RateLimit }) {
+            var remainingWaitMs = 0L
+            withRetry(
+                isRetryable = { it is CodexError.RateLimit },
+                onRetryWait = { policyWait, error ->
+                    val seconds = (error as? CodexError.RateLimit)?.retryAfterSeconds ?: 0L
+                    // Model discovery may be cancelled in Settings. Do not send another
+                    // request before the server's time, even if the shared policy caps its wait.
+                    remainingWaitMs = (seconds * 1000 - policyWait).coerceAtLeast(0)
+                },
+            ) {
+                delay(remainingWaitMs)
                 val startMs = System.currentTimeMillis()
                 httpClient.newCall(request).execute().use { response ->
                     when {

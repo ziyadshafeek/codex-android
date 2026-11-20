@@ -65,6 +65,7 @@ import dev.codex.android.ui.HelpScreen
 import dev.codex.android.ui.HistoryScreen
 import dev.codex.android.ui.OnboardingScreen
 import dev.codex.android.ui.PreviewScreen
+import dev.codex.android.ui.ReviewInboxScreen
 import dev.codex.android.ui.SettingsScreen
 import dev.codex.android.ui.ShareActivity
 import dev.codex.android.ui.StoreScreen
@@ -200,6 +201,7 @@ class MainActivity : ComponentActivity() {
                     var showSettings by remember { mutableStateOf(false) }
                     var showAutomations by remember { mutableStateOf(false) }
                     var createAutomation by remember { mutableStateOf(false) }
+                    var showReviewInbox by remember { mutableStateOf(false) }
                     var showHistory by remember { mutableStateOf(false) }
                     var showStore by remember { mutableStateOf(false) }
                     var showPreview by remember { mutableStateOf(false) }
@@ -334,9 +336,20 @@ class MainActivity : ComponentActivity() {
                             onSaved = { createAutomation = false },
                             onBack = { createAutomation = false },
                         )
+                        showReviewInbox -> ReviewInboxScreen(
+                            database = database,
+                            onBack = { showReviewInbox = false },
+                            onThreadClick = { id ->
+                                viewModel.openThread(id)
+                                showReviewInbox = false
+                                showAutomations = false
+                                showSettings = false
+                            },
+                        )
                         showAutomations -> AutomationListScreen(
                             database = database,
                             onCreateClick = { createAutomation = true },
+                            onOpenReview = { showReviewInbox = true },
                             onBack = { showAutomations = false },
                         )
                         showSettings -> {

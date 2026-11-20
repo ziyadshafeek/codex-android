@@ -64,6 +64,7 @@ private val INTERVAL_PRESETS_MINUTES = listOf(15L to "15m", 60L to "1h", 360L to
 fun AutomationListScreen(
     database: CodexDatabase,
     onCreateClick: () -> Unit = {},
+    onOpenReview: () -> Unit,
     onBack: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -94,6 +95,7 @@ fun AutomationListScreen(
                     }
                 },
                 actions = {
+                    TextButton(onClick = onOpenReview) { Text("Review inbox") }
                     TextButton(onClick = onCreateClick) {
                         Text("New")
                     }
@@ -338,11 +340,11 @@ fun AutomationCreatorScreen(
                                 lastStatus = null,
                             )
                             scope.launch {
-                                runCatching { database.upsertAutomation(automation) }
-                                    .onSuccess {
-                                        AutomationScheduler.sync(context, automation)
-                                        onSaved(automation)
-                                    }
+                                runCatching {
+                                    database.upsertAutomation(automation)
+                                    AutomationScheduler.sync(context, automation)
+                                }
+                                    .onSuccess { onSaved(automation) }
                                     .onFailure {
                                         error = "Could not save: ${it.message}"
                                     }
