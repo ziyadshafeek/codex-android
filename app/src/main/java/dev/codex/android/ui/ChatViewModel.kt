@@ -50,6 +50,7 @@ import dev.codex.android.data.WorkspaceEntity
 import dev.codex.android.instructions.RepoInstructions
 import dev.codex.android.mcp.McpHub
 import dev.codex.android.memory.MemoryCommand
+import dev.codex.android.memory.MemoryForgetTool
 import dev.codex.android.memory.MemorySaveTool
 import dev.codex.android.memory.MemorySearchTool
 import dev.codex.android.memory.PersonalMemory
@@ -1551,6 +1552,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // it could not save. Registered here, never in withBuiltins, so no
         // background run writes a note while the user is not asking for it.
         interactive.register(MemorySaveTool(personalMemory::remember))
+        // Memory forget (chat-only): the manage side — without it a corrected
+        // fact left the stale note standing next to the new one.
+        interactive.register(MemoryForgetTool(personalMemory::forget))
         interactive.register(AttachmentReadTool(application, fileLibrary, threadId))
         // Sub-agents (Worker T): the tool was the only missing piece —
         // the orchestrator already works. Registered chat-only (never in

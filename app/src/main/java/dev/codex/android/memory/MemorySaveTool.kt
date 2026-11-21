@@ -33,8 +33,10 @@ class MemorySaveTool(
 ) : Tool {
     override val name = "memory_save"
     override val description = "Saves a note to the user's memory so it is remembered in later chats. " +
-        "Call ONLY when the user explicitly asks you to remember or save something ('remember this', " +
-        "'save that to memory'). Never save anything unprompted, and never save credentials, keys or passwords. " +
+        "Call whenever the user shares a durable fact, preference, decision or commitment — you do not " +
+        "need to be asked — and also when they explicitly ask you to remember or save something " +
+        "('remember this', 'save that to memory'). Never save credentials, keys or passwords, never save " +
+        "something said only in passing, and never save what the user asks you to forget. " +
         "Write the note in the user's own words; keep it to one fact or preference."
     override val sensitive = false
     override val parametersSchema = buildJsonObject {
