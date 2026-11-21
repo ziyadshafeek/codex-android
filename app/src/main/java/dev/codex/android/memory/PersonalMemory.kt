@@ -14,11 +14,15 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
 /**
- * Durable notes are opt-in writes from the person. The person writes
- * directly (`/remember ...`, the Notes tab), or asks the agent in chat
- * to save something (the `memory_save` tool, chat-only, which only fires
- * on an explicit ask). The model never saves a note unprompted, and
- * [remember] still refuses anything credential-looking.
+ * Durable notes are the agent's memory of the person, always on — like
+ * Muse's. The person writes directly (`/remember ...`, the Notes tab),
+ * asks the agent in chat to save something (the `memory_save` tool on an
+ * explicit ask), or simply shares a durable fact, preference, decision or
+ * commitment in conversation — the agent saves those itself, without
+ * being asked. It never saves credentials, passing remarks, or anything
+ * the user asked it to forget. [remember] still refuses anything
+ * credential-looking, and any note can be removed from the Notes tab or
+ * with `/forget`.
  */
 class PersonalMemory(context: Context) {
     private val store = MemoryStore(context)

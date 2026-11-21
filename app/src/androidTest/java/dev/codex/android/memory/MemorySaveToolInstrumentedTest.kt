@@ -71,4 +71,22 @@ class MemorySaveToolInstrumentedTest {
         assertNotNull("recall should surface the saved preference", recalled)
         assertTrue(recalled!!.contains("dark mode"))
     }
+
+    @Test
+    fun forgetRemovesNoteSoSearchFindsNothing() = runBlocking {
+        val saver = MemorySaveTool(memory::remember)
+        val saved = saver.execute(
+            args("note" to "The garden test plant is Basil", "key" to "garden-forget-test"),
+        )
+        assertTrue("memory_save should succeed: ${saved.error}", saved.ok)
+        val searchBefore = MemorySearchTool(memory).execute(args("query" to "garden plant"))
+        assertTrue(searchBefore.output.contains("Basil"))
+
+        val forgetter = MemoryForgetTool(memory::forget)
+        val forgotten = forgetter.execute(args("key" to "garden-forget-test"))
+        assertTrue("memory_forget should succeed: ${forgotten.error}", forgotten.ok)
+        assertTrue(memory.list().none { it.key == "garden-forget-test" })
+        val searchAfter = MemorySearchTool(memory).execute(args("query" to "garden plant"))
+        assertTrue(searchAfter.output.contains("No saved notes match"))
+    }
 }

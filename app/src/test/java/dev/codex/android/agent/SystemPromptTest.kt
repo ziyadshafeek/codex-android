@@ -92,6 +92,18 @@ class SystemPromptTest {
         assertTrue(prompt.contains("Write like a person in chat: short replies, lead with the answer, plain language, no filler."))
         // Learning
         assertTrue(prompt.contains("When the user corrects you, remember it and do not make the same mistake again."))
+        // Always-on memory (v2.3.2, at the user's explicit order): the agent
+        // saves durable facts itself, without being asked — like Muse.
+        assertTrue(prompt.contains("Remember what the user tells you, the way a person would"))
+        assertTrue(prompt.contains("call memory_save with it in their own words"))
+        assertTrue(prompt.contains("you do not need to be asked"))
+        assertFalse(prompt.contains("Only save what the user explicitly asks to save"))
+        assertFalse(prompt.contains("never save anything unprompted"))
+        // Manage + refer (v2.3.2, same order): keep memory true, and show it working.
+        assertTrue(prompt.contains("Keep memory true"))
+        assertTrue(prompt.contains("forget the old note with memory_forget and save the new one"))
+        assertTrue(prompt.contains("Use what you remember"))
+        assertTrue(prompt.contains("like you told me"))
         // Tool discipline (kept from the original prompt)
         assertTrue(prompt.contains("Never invent a tool that is not listed."))
         assertTrue(prompt.contains("Read a tool's result before acting on it."))
