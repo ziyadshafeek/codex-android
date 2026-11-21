@@ -81,13 +81,13 @@ class PdfToolsTest {
         PDDocument.load(file).use { it.numberOfPages }
 
     private fun readPdf(path: String) = runBlocking {
-        ReadPdfTool.execute(args("path" to path, "pages" to "all"))
+        ReadPdfTool(tempDir).execute(args("path" to path, "pages" to "all"))
     }
 
     @Test
     fun pdfCreate_textAndTitleRoundTrip() = runBlocking {
         val out = File(tempDir, "made.pdf")
-        val result = PdfCreateTool.execute(
+        val result = PdfCreateTool(tempDir).execute(
             args(
                 "output_path" to out.absolutePath,
                 "title" to "My Notes",
@@ -108,7 +108,7 @@ class PdfToolsTest {
 
     @Test
     fun pdfCreate_rejectsNonPdfOutput() = runBlocking {
-        val result = PdfCreateTool.execute(
+        val result = PdfCreateTool(tempDir).execute(
             args("output_path" to File(tempDir, "x.txt").absolutePath, "content" to "hi"),
         )
         assertFalse(result.ok)
@@ -119,7 +119,7 @@ class PdfToolsTest {
         val a = writePdf("a.pdf", listOf("Alpha one", "Alpha two"))
         val b = writePdf("b.pdf", listOf("Beta one"))
         val out = File(tempDir, "merged.pdf")
-        val result = PdfMergeTool.execute(argsWithInputs(listOf(a.absolutePath, b.absolutePath), out.absolutePath))
+        val result = PdfMergeTool(tempDir).execute(argsWithInputs(listOf(a.absolutePath, b.absolutePath), out.absolutePath))
         assertTrue(result.ok)
         assertEquals(3, pageCount(out))
         val read = readPdf(out.absolutePath)
@@ -132,7 +132,7 @@ class PdfToolsTest {
     fun pdfMerge_needsTwoInputs() = runBlocking {
         val a = writePdf("a.pdf", listOf("Alpha one"))
         assertFalse(
-            PdfMergeTool.execute(argsWithInputs(listOf(a.absolutePath), File(tempDir, "m.pdf").absolutePath)).ok,
+            PdfMergeTool(tempDir).execute(argsWithInputs(listOf(a.absolutePath), File(tempDir, "m.pdf").absolutePath)).ok,
         )
     }
 
@@ -140,7 +140,7 @@ class PdfToolsTest {
     fun pdfSplit_rangeAndPerPage() = runBlocking {
         val src = writePdf("src.pdf", listOf("Page one", "Page two", "Page three"))
         val out = File(tempDir, "part.pdf")
-        val range = PdfSplitTool.execute(
+        val range = PdfSplitTool(tempDir).execute(
             args("path" to src.absolutePath, "pages" to "2-3", "output_path" to out.absolutePath),
         )
         assertTrue(range.ok)
@@ -151,7 +151,7 @@ class PdfToolsTest {
         assertFalse(read.output.contains("Page one"))
 
         val dir = File(tempDir, "pages").apply { mkdirs() }
-        val perPage = PdfSplitTool.execute(
+        val perPage = PdfSplitTool(tempDir).execute(
             args("path" to src.absolutePath, "pages" to "all", "per_page" to true, "output_dir" to dir.absolutePath),
         )
         assertTrue(perPage.ok)
@@ -166,7 +166,7 @@ class PdfToolsTest {
     fun pdfRotate_onlyRequestedPages() = runBlocking {
         val src = writePdf("rot.pdf", listOf("One", "Two", "Three"))
         val out = File(tempDir, "rotated.pdf")
-        val result = PdfRotateTool.execute(
+        val result = PdfRotateTool(tempDir).execute(
             args("path" to src.absolutePath, "pages" to "2", "degrees" to 90, "output_path" to out.absolutePath),
         )
         assertTrue(result.ok)
@@ -180,7 +180,7 @@ class PdfToolsTest {
             assertEquals(0, doc.getPage(1).rotation)
         }
         assertFalse(
-            PdfRotateTool.execute(
+            PdfRotateTool(tempDir).execute(
                 args("path" to src.absolutePath, "degrees" to 45, "output_path" to File(tempDir, "x.pdf").absolutePath),
             ).ok,
         )
@@ -214,21 +214,21 @@ class PdfToolsTest {
     @Test
     fun pdfForms_listGetSet() = runBlocking {
         val src = writeFormPdf("form.pdf")
-        val list = PdfFormsTool.execute(args("path" to src.absolutePath, "operation" to "list"))
+        val list = PdfFormsTool(tempDir).execute(args("path" to src.absolutePath, "operation" to "list"))
         assertTrue(list.ok)
         assertTrue(list.output.contains("full_name"))
         assertTrue(list.output.contains("Ada Lovelace"))
         assertTrue(list.output.contains("city"))
 
-        val get = PdfFormsTool.execute(args("path" to src.absolutePath, "operation" to "get", "field" to "city"))
+        val get = PdfFormsTool(tempDir).execute(args("path" to src.absolutePath, "operation" to "get", "field" to "city"))
         assertTrue(get.ok)
         assertTrue(get.output.contains("London"))
 
-        val missing = PdfFormsTool.execute(args("path" to src.absolutePath, "operation" to "get", "field" to "nope"))
+        val missing = PdfFormsTool(tempDir).execute(args("path" to src.absolutePath, "operation" to "get", "field" to "nope"))
         assertFalse(missing.ok)
 
         val filled = File(tempDir, "filled.pdf")
-        val set = PdfFormsTool.execute(
+        val set = PdfFormsTool(tempDir).execute(
             buildJsonObject {
                 put("path", src.absolutePath)
                 put("operation", "set")
@@ -239,17 +239,17 @@ class PdfToolsTest {
             },
         )
         assertTrue(set.ok)
-        val check = PdfFormsTool.execute(args("path" to filled.absolutePath, "operation" to "get", "field" to "full_name"))
+        val check = PdfFormsTool(tempDir).execute(args("path" to filled.absolutePath, "operation" to "get", "field" to "full_name"))
         assertTrue(check.output.contains("Grace Hopper"))
         // Original unchanged.
-        val original = PdfFormsTool.execute(args("path" to src.absolutePath, "operation" to "get", "field" to "full_name"))
+        val original = PdfFormsTool(tempDir).execute(args("path" to src.absolutePath, "operation" to "get", "field" to "full_name"))
         assertTrue(original.output.contains("Ada Lovelace"))
     }
 
     @Test
     fun pdfForms_noFormFailsPlainly() = runBlocking {
         val src = writePdf("plain.pdf", listOf("No form here"))
-        val result = PdfFormsTool.execute(args("path" to src.absolutePath, "operation" to "list"))
+        val result = PdfFormsTool(tempDir).execute(args("path" to src.absolutePath, "operation" to "list"))
         assertFalse(result.ok)
         assertTrue(result.error?.contains("no form") == true)
     }

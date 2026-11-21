@@ -76,6 +76,7 @@ class ToolRegistry {
         /** A registry with all built-in tools registered. */
         fun withBuiltins(context: Context): ToolRegistry =
             ToolRegistry().apply {
+                val workspaceRoot = File(context.filesDir, "workspace")
                 register(GetTimeTool)
                 register(DeviceInfoTool)
                 register(EchoTool)
@@ -108,20 +109,23 @@ class ToolRegistry {
                 register(ModelPolicyTool)
                 // Session search (Worker F): searches past chat threads.
                 register(SessionSearchTool(context))
-                // Document tools (Worker I): plain objects, no dependencies,
-                // so they live in withBuiltins and reach chat, automations,
-                // sub-agents and the daemon. OcrImageTool needs a shell, so
-                // it is registered per chat thread in policyGatedRegistry.
-                register(ReadPdfTool)
-                register(ReadDocumentTool)
-                register(ReadTextFileTool)
-                register(PdfCreateTool)
-                register(PdfMergeTool)
-                register(PdfSplitTool)
-                register(PdfRotateTool)
-                register(PdfFormsTool)
-                register(DocumentCreateTool)
-                register(DocumentEditTool)
+                // Document tools (Worker I): each takes the workspace root
+                // so /workspace/... and workspace-relative paths resolve to
+                // real files (the agent is told the workspace lives at
+                // /workspace). They live in withBuiltins and reach chat,
+                // automations, sub-agents and the daemon. OcrImageTool needs
+                // a shell, so it is registered per chat thread in
+                // policyGatedRegistry.
+                register(ReadPdfTool(workspaceRoot))
+                register(ReadDocumentTool(workspaceRoot))
+                register(ReadTextFileTool(workspaceRoot))
+                register(PdfCreateTool(workspaceRoot))
+                register(PdfMergeTool(workspaceRoot))
+                register(PdfSplitTool(workspaceRoot))
+                register(PdfRotateTool(workspaceRoot))
+                register(PdfFormsTool(workspaceRoot))
+                register(DocumentCreateTool(workspaceRoot))
+                register(DocumentEditTool(workspaceRoot))
                 // Computer-use tools (swipe, tap_node, send_intent,
                 // clipboard_get/set): wired here so every registry built
                 // from withBuiltins (chat, automations, subagents, daemon)
@@ -134,7 +138,7 @@ class ToolRegistry {
                 // File locations (Worker P): resolves a package, binary,
                 // workspace path or attachment to its real on-device and
                 // in-shell paths. Never invents a path.
-                register(WhereIsTool(filesDir = context.filesDir, workspaceRoot = File(context.filesDir, "workspace")))
+                register(WhereIsTool(filesDir = context.filesDir, workspaceRoot = workspaceRoot))
             }
     }
 }
