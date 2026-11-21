@@ -30,14 +30,14 @@ class MemoryForgetTool(
     override val description = "Forgets a saved memory note by its name. " +
         "Call when the user asks you to forget something ('forget that', 'don't remember this'), " +
         "or when they correct a saved fact — forget the old note, then save the new one with memory_save. " +
-        "If you do not know the note's exact name, call memory_search first to find it."
+        "If you do not know the note's exact name, search memory first to find it."
     override val sensitive = false
     override val parametersSchema = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("key") {
                 put("type", "string")
-                put("description", "The exact name of the saved note to forget, as shown by memory_search or /memory")
+                put("description", "The exact name of the saved note to forget, as shown by a memory search or /memory")
             }
         }
         putJsonArray("required") { add("key") }
