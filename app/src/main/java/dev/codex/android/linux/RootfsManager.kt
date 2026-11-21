@@ -504,6 +504,28 @@ class RootfsManager internal constructor(
     fun isInstalled(): Boolean = isReadyRootfs(rootfsDir())
 
     /**
+     * Deletes the whole Alpine rootfs directory (`linux/rootfs`), including
+     * every package installed inside it, and returns true only when the
+     * directory is really gone afterwards. Already-gone counts as success.
+     * Downloads (`linux/downloads`) and staged native binaries
+     * (`linux/native-stage`) are left alone, so a later [ensureRootfs]
+     * reinstalls from the pinned artifacts. Never called silently: the
+     * Storage screen gates this behind a confirmation dialog, and the
+     * agent has no tool that calls it.
+     *
+     * Reuses the same symlink-safe tree walk as [deleteIncompleteRootfs];
+     * install/bootstrap/download logic is untouched.
+     */
+    fun wipeRootfs(): Boolean {
+        val root = rootfsDir()
+        if (!root.exists()) return true
+        return runCatching {
+            deleteIncompleteRootfs(root.toPath())
+            !root.exists()
+        }.getOrDefault(false)
+    }
+
+    /**
      * Downloads, SHA-256 verifies, and extracts the ARM64 Alpine minirootfs plus
      * verifies/stages the PRoot binaries from the Termux `.deb`.
      * Idempotent: returns immediately if already installed.
@@ -634,7 +656,8 @@ class RootfsManager internal constructor(
 
     /**
      * Installs a supported developer toolchain inside the rootfs via `apk add --no-cache`.
-     * Supported names: `git`, `rg`, `python`, `node`, `go`, `rust`, `clang`.
+     * Supported names: `git`, `rg`, `python`, `node`, `go`, `rust`, `clang`, `ocr`
+     * (`ocr` installs Tesseract + poppler for the `ocr_image` tool).
      */
     suspend fun ensureToolchain(name: String): Boolean = withContext(Dispatchers.IO) {
         val packages = TOOLCHAIN_PACKAGES[name.trim().lowercase()] ?: return@withContext false
@@ -789,10 +812,32 @@ class RootfsManager internal constructor(
             "git" to listOf("git", "openssh-client", "ca-certificates"),
             "rg" to listOf("ripgrep"),
             "python" to listOf("python3", "py3-pip"),
+            // Pillow (PIL) for image enhancement: the Alpine package is
+            // `py3-pillow` (pre-built, musl-compatible — do NOT `pip install`
+            // Pillow here, it needs a C toolchain + headers to build). Used
+            // by the image_enhance tool; installed on demand, never at boot.
+            "pillow" to listOf("py3-pillow"),
             "node" to listOf("nodejs", "npm"),
             "go" to listOf("go"),
             "rust" to listOf("rust", "cargo"),
             "clang" to listOf("clang", "lld", "musl-dev", "make"),
+            // Gemini API CLI prerequisites: the CLI itself has no Alpine
+            // package — it is a GitHub release binary installed on first
+            // use by the documented install script (curl …/install.sh |
+            // bash), which needs curl + bash + CA certs. The gemini-api-cli
+            // skill checks `command -v gemini-api` and installs it before
+            // any real use; ensureToolchain("gemini-cli") only stages the
+            // prerequisites, never the CLI binary itself.
+            "gemini-cli" to listOf("curl", "bash", "ca-certificates"),
+            // ffmpeg + ffprobe (one Alpine package ships both) for the
+            // gemini_video tool: trims/scales source clips to the 10 s
+            // edit/extend limit and strips audio for regeneration.
+            "ffmpeg" to listOf("ffmpeg"),
+            // OCR: Tesseract for ocr_image, poppler (pdftoppm) so a scanned
+            // PDF page can be rendered to an image first. Alpine package
+            // names verified against the Alpine v3.20 aarch64 repository
+            // index (tesseract-ocr, poppler both present).
+            "ocr" to listOf("tesseract-ocr", "poppler"),
         )
 
         fun defaultHttpClient(): OkHttpClient = OkHttpClient.Builder()

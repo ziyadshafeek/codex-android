@@ -289,6 +289,49 @@ class McpManager(
         return client.callTool(name, arguments)
     }
 
+    // --- Resources ---
+
+    /**
+     * `resources/list` on one connected server. Throws
+     * [IllegalStateException] when the server is not connected; transport
+     * failures surface as [java.io.IOException] from [McpClient].
+     */
+    suspend fun listResources(serverId: String): List<McpResource> {
+        val client = clientsMutex.withLock { clients[serverId] }
+            ?: throw IllegalStateException("MCP server $serverId is not connected")
+        return client.listResources(serverId)
+    }
+
+    /**
+     * `resources/read` on one connected server. Throws
+     * [IllegalStateException] when the server is not connected;
+     * [java.io.IOException] on transport failure, a JSON-RPC error, or an
+     * empty contents array.
+     */
+    suspend fun readResource(serverId: String, uri: String): McpResourceContent {
+        val client = clientsMutex.withLock { clients[serverId] }
+            ?: throw IllegalStateException("MCP server $serverId is not connected")
+        return client.readResource(serverId, uri)
+    }
+
+    // --- Events (opportunistic notification capture) ---
+
+    /**
+     * Notifications the connected clients recorded opportunistically from
+     * SSE response bodies since the last drain (see [McpEvent] KDoc for
+     * the limit: there is no persistent stream, so this is not a live
+     * feed). Drains each client's buffer as it reads it.
+     */
+    suspend fun recentNotifications(): List<McpEvent> {
+        val snapshot = clientsMutex.withLock { clients.values.toList() }
+        val out = mutableListOf<McpEvent>()
+        for (client in snapshot) {
+            out += client.recentNotifications()
+            client.clearNotifications()
+        }
+        return out.sortedBy { it.receivedAtMillis }
+    }
+
     /**
      * The connected servers' tools as AgentLoop [Tool]s, namespaced
      * `mcp_<server>_<tool>` (see [toolName]). Fetches the live tool list

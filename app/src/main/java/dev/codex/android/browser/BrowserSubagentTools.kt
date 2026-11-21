@@ -280,6 +280,10 @@ class BrowserScreenshotTool(private val browser: VerificationBrowser) : Tool {
                 val dir = File(browser.appContext.cacheDir, "browser-screenshots").apply { mkdirs() }
                 val file = File(dir, "browser-${System.currentTimeMillis()}.png")
                 file.writeBytes(png)
+                // Prune old screenshots: every capture used to write a
+                // new file and nothing ever deleted them, so a long
+                // verification session grew the cache without bound.
+                pruneOldScreenshots(dir)
                 val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                 BitmapFactory.decodeByteArray(png, 0, png.size, options)
                 Triple(file.absolutePath, options.outWidth, options.outHeight)
@@ -291,5 +295,20 @@ class BrowserScreenshotTool(private val browser: VerificationBrowser) : Tool {
         } catch (e: Exception) {
             ToolResult(ok = false, output = "", error = e.message ?: "Screenshot failed")
         }
+    }
+}
+
+/**
+ * Keeps only the [keep] newest screenshots in [dir] (by last-modified),
+ * deleting the rest. Best-effort: a pruning failure never fails the
+ * capture that just succeeded. Top-level so JVM tests can call it
+ * directly.
+ */
+internal fun pruneOldScreenshots(dir: File, keep: Int = 10) {
+    runCatching {
+        val files = dir.listFiles { f -> f.isFile && f.name.startsWith("browser-") && f.name.endsWith(".png") }
+            ?.sortedByDescending { it.lastModified() }
+            ?: return
+        files.drop(keep).forEach { runCatching { it.delete() } }
     }
 }

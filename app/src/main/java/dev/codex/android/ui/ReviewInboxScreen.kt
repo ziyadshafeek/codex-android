@@ -50,9 +50,8 @@ data class ReviewInboxEntry(
  * showing each run's summary (its last assistant message); tapping a row
  * marks it read and opens the thread via [onThreadClick].
  *
- * Standalone composable — NOT wired into navigation. The caller supplies
- * the [CodexDatabase] and receives the tapped thread id; opening the
- * thread itself is the caller's job.
+ * Reached from the Automations screen ("Review inbox" in its top bar);
+ * MainActivity opens the tapped thread in the chat.
  *
  * Note: per-run file diffs are not stored in the DB (WorkspaceFileTools
  * keeps change snapshots in memory only), so the "diff" a run produced

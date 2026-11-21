@@ -78,6 +78,18 @@ class ScheduleTaskTool(private val context: Context) : Tool {
                     "or \"yyyy-MM-ddTHH:mm\" (e.g. \"2026-11-20T09:30\")",
             )
 
+        // An ISO date-time in the past is not a schedule: the alarm
+        // would fire immediately (or never), while the tool would still
+        // claim "Scheduled". ("HH:mm" past today already rolls over to
+        // tomorrow inside parseTime, so only ISO input can reach here.)
+        if (triggerAtMillis <= System.currentTimeMillis()) {
+            return ToolResult(
+                ok = false,
+                output = "",
+                error = "Time \"$timeRaw\" is in the past — schedule a future time.",
+            )
+        }
+
         return try {
             val task = ScheduledTask(
                 id = UUID.randomUUID().toString(),
@@ -85,7 +97,16 @@ class ScheduleTaskTool(private val context: Context) : Tool {
                 prompt = prompt,
                 triggerAtMillis = triggerAtMillis,
             )
-            TaskScheduler.schedule(context, task)
+            // scheduleNow waits until the task is actually persisted
+            // AND the alarm is armed: the old fire-and-forget schedule()
+            // reported "Scheduled" even when the save or arm later failed.
+            if (!TaskScheduler.scheduleNow(context, task)) {
+                return ToolResult(
+                    ok = false,
+                    output = "",
+                    error = "Could not save or arm the scheduled task \"$title\" — try again.",
+                )
+            }
             val human = LocalDateTime.ofInstant(
                 java.time.Instant.ofEpochMilli(triggerAtMillis),
                 ZoneId.systemDefault(),

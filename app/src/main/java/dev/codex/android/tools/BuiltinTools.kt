@@ -87,8 +87,25 @@ object EchoTool : Tool {
  * Opens another app on the phone by its package name.
  * Not sensitive: launching apps is not in the gated list
  * (message / call / setting / money / delete).
+ *
+ * [launchIntentForPackage] is the package-resolution step, injected
+ * so JVM tests can prove the tool's behaviour with a fake resolver
+ * (returning null = "no launchable app") without ever launching a
+ * real app. Production passes nothing and gets the default:
+ * [android.content.pm.PackageManager.getLaunchIntentForPackage],
+ * which on Android 11+ only sees launchable apps because the
+ * manifest declares the LAUNCHER <queries> intent.
  */
-class OpenAppTool(private val context: Context) : Tool {
+class OpenAppTool(
+    // Nullable so JVM tests can build the tool without an Android
+    // Context: the missing-arg and null-resolver paths return before
+    // the context is ever touched. Production always passes a real
+    // Context (ToolRegistry.withBuiltins).
+    private val context: Context?,
+    private val launchIntentForPackage: (String) -> Intent? = { pkg ->
+        context?.packageManager?.getLaunchIntentForPackage(pkg)
+    },
+) : Tool {
     override val name: String = "open_app"
     override val description: String = "Opens another app on the phone by its package name"
     override val parametersSchema: JsonObject = buildJsonObject {
@@ -111,14 +128,20 @@ class OpenAppTool(private val context: Context) : Tool {
                 error = "Missing required argument: package_name",
             )
         return try {
-            val intent = context.packageManager.getLaunchIntentForPackage(packageName)
+            val intent = launchIntentForPackage(packageName)
                 ?: return ToolResult(
                     ok = false,
                     output = "",
                     error = "No launchable app for package $packageName",
                 )
+            val ctx = context
+                ?: return ToolResult(
+                    ok = false,
+                    output = "",
+                    error = "No Android context available to open $packageName",
+                )
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(intent)
+            ctx.startActivity(intent)
             ToolResult(ok = true, output = "Opened $packageName")
         } catch (e: Exception) {
             ToolResult(

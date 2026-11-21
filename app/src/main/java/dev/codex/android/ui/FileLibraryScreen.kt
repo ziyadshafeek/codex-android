@@ -17,6 +17,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.codex.android.attachments.FileStorage
 import dev.codex.android.attachments.ManagedFile
+import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -64,6 +65,13 @@ internal fun FileLibraryDialog(viewModel: ChatViewModel, canAttach: Boolean, onC
                         Text("Managed files: ${size(s.managed)}\nWorkspace projects: ${size(s.workspace)}\nLinux runtime: ${size(s.linux)}\nPhone storage free: ${size(s.free)}\nPhone RAM available: ${size(s.ramAvailable)} / ${size(s.ramTotal)}")
                     }
                     Text("Linux shares the phone’s RAM and has no separate VM allocation. The limit applies to library copies and chat originals, not project files.", style = MaterialTheme.typography.bodySmall)
+                    // Where installed packages live: the Linux rootfs is the app's private
+                    // storage at <filesDir>/linux/rootfs (RootfsManager.rootfsDir()); from
+                    // inside the shell that directory is "/". Informational text only.
+                    Text("Installed packages live in the Linux workspace at ${File(context.filesDir, "linux/rootfs").path} " +
+                        "(in the shell: /). Binaries such as pdftoppm are at /usr/bin/pdftoppm inside the shell. " +
+                        "Workspace files are at ${viewModel.workspaceFileTools.rootDir.path} (in the shell: /workspace).",
+                        style = MaterialTheme.typography.bodySmall)
                     OutlinedTextField(limit, { limit = it.filter(Char::isDigit).take(4) }, label = { Text("Managed limit (MiB)") }, singleLine = true,
                         modifier = Modifier.fillMaxWidth().testTag("file_library_limit"))
                     val valid = limit.toIntOrNull()?.takeIf { it in 0..4096 }

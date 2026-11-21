@@ -58,10 +58,9 @@ data class QueuedCall<T>(
  * only queue calls that are actually safe to overlap — the runner trusts
  * [QueuedCall.isReadOnly]; it cannot verify a tool's side effects.
  *
- * This runner is deliberately NOT wired into [AgentLoop]: that loop
- * executes the model's tool calls serially today, and switching it to
- * batched execution (including how approval-gated calls become barriers)
- * is a separate integration step.
+ * This runner IS wired into [AgentLoop] (executeToolCalls runs each
+ * batch of ready, read-only calls through [runBatched]); the loop stays
+ * serial for approval-gated and mutating calls, which become barriers.
  */
 class ParallelToolRunner(
     val maxParallelReads: Int = DEFAULT_MAX_PARALLEL_READS,

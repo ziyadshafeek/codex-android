@@ -340,6 +340,7 @@ class AutomationWorker(
             recalledMemory = memory::recall,
             soulMarkdown = memory::soulForAgent,
             transcript = transcriptRecorder(CodexDatabase.getInstance(context), threadId),
+            userName = KeyStore(context).userName(),
         )
 
         return try {
@@ -440,9 +441,14 @@ class AutomationWorker(
         val memory = PersonalMemory(context)
         val base = ToolRegistry.withBuiltins(context)
         if (memory.isRecallEnabled()) base.register(MemorySearchTool(memory))
-        base.all().forEach { tool ->
-            gated.register(PolicyGatedTool(tool, threadId, db))
-        }
+        base.all()
+            // The question tool queues for an answer no unattended run
+            // can ever receive, and generate_app is interactive-only:
+            // exclude both here, as interactive chat does.
+            .filterNot { it.name in setOf("question", "generate_app") }
+            .forEach { tool ->
+                gated.register(PolicyGatedTool(tool, threadId, db))
+            }
         return gated
     }
 }

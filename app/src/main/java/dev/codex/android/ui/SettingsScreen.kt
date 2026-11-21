@@ -97,7 +97,7 @@ private fun ContextSettings(settings: dev.codex.android.data.KeyStore) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(viewModel: ChatViewModel, onBack: () -> Unit, onOpenHelp: () -> Unit, onOpenAutomations: () -> Unit) {
+fun SettingsScreen(viewModel: ChatViewModel, onBack: () -> Unit, onOpenHelp: () -> Unit, onOpenAutomations: () -> Unit, onOpenSkills: () -> Unit, onOpenStorage: () -> Unit = {}) {
     val keyStore = viewModel.keyStore
     var baseUrl by remember { mutableStateOf(keyStore.getBaseUrl()) }
     var model by remember { mutableStateOf(keyStore.getModel()) }
@@ -309,6 +309,14 @@ fun SettingsScreen(viewModel: ChatViewModel, onBack: () -> Unit, onOpenHelp: () 
             Spacer(modifier = Modifier.height(24.dp))
             OutlinedButton(onClick = onOpenAutomations, modifier = Modifier.fillMaxWidth().testTag("settings_automations")) {
                 Text("Automations")
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedButton(onClick = onOpenSkills, modifier = Modifier.fillMaxWidth().testTag("settings_skills")) {
+                Text("Skills")
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedButton(onClick = onOpenStorage, modifier = Modifier.fillMaxWidth().testTag("settings_storage")) {
+                Text("Storage")
             }
             Spacer(modifier = Modifier.height(16.dp))
             MemorySettings(viewModel.personalMemory)

@@ -4,6 +4,7 @@ import android.content.Context
 import dev.codex.android.api.FunctionDefinition
 import dev.codex.android.api.ToolDefinition
 import kotlinx.serialization.json.JsonObject
+import java.io.File
 
 /**
  * Result of executing a [Tool].
@@ -88,15 +89,52 @@ class ToolRegistry {
                 register(ScheduleTaskTool(context))
                 register(GenerateAppTool(context))
                 register(ListStoreTool(context))
-                // Filler (other AI): question / todo / web tools. The web
-                // search endpoint + key are blank until a BYOK search
-                // setting exists in KeyStore — the tool then reports
-                // itself unconfigured rather than calling anything.
+                // Filler (other AI): question / todo tools. Web search
+                // works with no setup: it runs via DuckDuckGo when no
+                // BYOK endpoint + key are supplied, and the endpoint +
+                // key override applies when both are given.
                 register(QuestionTool)
                 register(TodoWriteTool(context))
                 register(TodoReadTool(context))
                 register(WebFetchTool())
                 register(WebSearchTool(endpoint = "", apiKey = ""))
+                // Content / media / policy tools (Worker E): HTML→Markdown,
+                // raw HTTP body, BYOK image generation, model policy.
+                // ImageGenerateTool is registered ONCE here — do not also
+                // register it in ChatViewModel.policyGatedRegistry.
+                register(HtmlMarkdownTool)
+                register(HttpBodyTool())
+                register(ImageGenerateTool(context))
+                register(ModelPolicyTool)
+                // Session search (Worker F): searches past chat threads.
+                register(SessionSearchTool(context))
+                // Document tools (Worker I): plain objects, no dependencies,
+                // so they live in withBuiltins and reach chat, automations,
+                // sub-agents and the daemon. OcrImageTool needs a shell, so
+                // it is registered per chat thread in policyGatedRegistry.
+                register(ReadPdfTool)
+                register(ReadDocumentTool)
+                register(ReadTextFileTool)
+                register(PdfCreateTool)
+                register(PdfMergeTool)
+                register(PdfSplitTool)
+                register(PdfRotateTool)
+                register(PdfFormsTool)
+                register(DocumentCreateTool)
+                register(DocumentEditTool)
+                // Computer-use tools (swipe, tap_node, send_intent,
+                // clipboard_get/set): wired here so every registry built
+                // from withBuiltins (chat, automations, subagents, daemon)
+                // offers them. They used to be defined but never
+                // registered anywhere, so the model could never call them.
+                registerComputerUseTools(this, context)
+                // PDF → image (Worker M): native PdfRenderer, pdftoppm
+                // fallback only when a shell is injected (chat registry).
+                register(PdfToImageTool(context))
+                // File locations (Worker P): resolves a package, binary,
+                // workspace path or attachment to its real on-device and
+                // in-shell paths. Never invents a path.
+                register(WhereIsTool(filesDir = context.filesDir, workspaceRoot = File(context.filesDir, "workspace")))
             }
     }
 }

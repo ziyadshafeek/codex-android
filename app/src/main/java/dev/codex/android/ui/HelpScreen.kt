@@ -63,7 +63,9 @@ fun HelpScreen(onBack: () -> Unit) {
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "Android may kill background apps. These steps keep Codex running.",
+                text = "Android may kill background apps. Exempt Codex from battery " +
+                    "optimisation and enable its Accessibility service — both are " +
+                    "under Settings → Keep Codex alive.",
                 style = MaterialTheme.typography.bodyMedium
             )
             Spacer(modifier = Modifier.height(12.dp))
@@ -71,6 +73,21 @@ fun HelpScreen(onBack: () -> Unit) {
                 text = "On Xiaomi, Oppo, Vivo and OnePlus, also allow autostart for Codex " +
                     "and lock it in the Recents screen — otherwise the phone may still " +
                     "kill it even with battery exemption.",
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Spacer(modifier = Modifier.height(24.dp))
+            Text(
+                text = "Slash commands",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Type / in the chat to run a command instead of asking the model: " +
+                    "/help lists them all. /plan drafts a plan first, /model switches model, " +
+                    "/compact and /recap summarise the thread, /fork copies it, /rename and " +
+                    "/delete manage it, /export saves it as a file, /skills and /plugins list " +
+                    "what is enabled, /mcp lists servers, /usage shows cost, /status shows " +
+                    "the run state, and /clear wipes the thread's messages.",
                 style = MaterialTheme.typography.bodyMedium
             )
         }

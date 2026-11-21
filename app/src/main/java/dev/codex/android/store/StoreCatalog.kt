@@ -88,4 +88,47 @@ class StoreCatalog(context: Context) {
             saveAll(listings.filter { it.id != id })
         }
     }
+
+    /**
+     * Deletes a store listing AND its generated source folder
+     * (`workspace/generated/<listing.appId>`, written by
+     * [AppGenerator.saveSource]). Returns true only when the listing is
+     * really gone from the catalogue AND the source folder is really gone.
+     * The templates themselves are never touched — only the generated
+     * app's own folder. Never throws; a failure reports false.
+     */
+    suspend fun deleteListingAndSource(listing: StoreListing, workspaceDir: File): Boolean {
+        mutex.withLock {
+            val listings = loadAll()
+            if (listings.any { it.id == listing.id }) {
+                saveAll(listings.filter { it.id != listing.id })
+            }
+        }
+        val sourceGone = deleteGeneratedAppSource(workspaceDir, listing.appId)
+        val listingGone = loadAll().none { it.id == listing.id }
+        return sourceGone && listingGone
+    }
+}
+
+/**
+ * Deletes the generated source folder `workspace/generated/<appId>` and
+ * returns true only when it is really gone (already-gone counts as
+ * success). Pure file op, JVM-testable. Rejects blank / path-traversal
+ * [appId]s outright so a crafted id can never escape the `generated`
+ * folder.
+ */
+internal fun deleteGeneratedAppSource(workspaceDir: File, appId: String): Boolean {
+    if (appId.isBlank() || appId == "." || appId == ".." ||
+        '/' in appId || '\\' in appId || '\u0000' in appId
+    ) return false
+    return runCatching {
+        val generatedRoot = File(workspaceDir, "generated").canonicalFile
+        val target = File(generatedRoot, appId).canonicalFile
+        if (target != generatedRoot && !target.path.startsWith(generatedRoot.path + File.separator)) {
+            return false
+        }
+        if (!target.exists()) return true
+        target.deleteRecursively()
+        !target.exists()
+    }.getOrDefault(false)
 }
