@@ -90,7 +90,12 @@ class AttachmentIntegrationTest {
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }))
                 compose.onNodeWithTag("attach_files").performClick()
-                compose.waitUntil(20_000) { compose.onAllNodesWithTag("attachment_page.pdf").fetchSemanticsNodes().isNotEmpty() }
+                // Staging wait is 45s, not 20s: on a loaded CI emulator the
+                // file-picker intent + staging all three files (incl. PDF
+                // render for the vision path) can take longer than 20s.
+                // Flaked in PR run 44854923143 at this 20s wait after the
+                // turn-completion waits were already raised to 45s.
+                compose.waitUntil(45_000) { compose.onAllNodesWithTag("attachment_page.pdf").fetchSemanticsNodes().isNotEmpty() }
                 compose.onNodeWithTag("attachment_sample.txt").assertIsDisplayed()
                 compose.onNodeWithTag("image_options").performClick()
                 compose.onNodeWithTag("inline_images_on").performClick()
