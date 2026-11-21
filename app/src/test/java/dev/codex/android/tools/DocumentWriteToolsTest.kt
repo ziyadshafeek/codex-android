@@ -44,7 +44,7 @@ class DocumentWriteToolsTest {
     }
 
     private fun readBack(path: String) = runBlocking {
-        ReadDocumentTool.execute(args("path" to path))
+        ReadDocumentTool(tempDir).execute(args("path" to path))
     }
 
     private fun zipText(file: File, entry: String): String =
@@ -58,7 +58,7 @@ class DocumentWriteToolsTest {
     fun createDocx_headingsParagraphsAndTableRoundTrip() = runBlocking {
         val out = File(tempDir, "report.docx")
         val content = "# Monthly Report\n## Summary\nSales went well this month.\n\n| Item | Qty |\n| Apples | 5 |\n| Oranges | 3 |"
-        val created = DocumentCreateTool.execute(
+        val created = DocumentCreateTool(tempDir).execute(
             args("format" to "docx", "output_path" to out.absolutePath, "title" to "Report", "content" to content),
         )
         assertTrue(created.ok)
@@ -76,12 +76,12 @@ class DocumentWriteToolsTest {
     @Test
     fun createDocx_wrongExtensionAndFormatFail() = runBlocking {
         assertFalse(
-            DocumentCreateTool.execute(
+            DocumentCreateTool(tempDir).execute(
                 args("format" to "docx", "output_path" to File(tempDir, "x.pdf").absolutePath, "content" to "hi"),
             ).ok,
         )
         assertFalse(
-            DocumentCreateTool.execute(
+            DocumentCreateTool(tempDir).execute(
                 args("format" to "odt", "output_path" to File(tempDir, "x.odt").absolutePath, "content" to "hi"),
             ).ok,
         )
@@ -91,11 +91,11 @@ class DocumentWriteToolsTest {
     fun editDocx_appendAndReplace() = runBlocking {
         val out = File(tempDir, "notes.docx")
         assertTrue(
-            DocumentCreateTool.execute(
+            DocumentCreateTool(tempDir).execute(
                 args("format" to "docx", "output_path" to out.absolutePath, "content" to "Hello world\nSecond line"),
             ).ok,
         )
-        val appended = DocumentEditTool.execute(
+        val appended = DocumentEditTool(tempDir).execute(
             args("path" to out.absolutePath, "operation" to "append", "content" to "## Added\nAppended paragraph"),
         )
         assertTrue(appended.ok)
@@ -103,7 +103,7 @@ class DocumentWriteToolsTest {
         assertTrue(read.output.contains("Appended paragraph"))
         assertTrue(read.output.contains("Hello world"))
 
-        val replaced = DocumentEditTool.execute(
+        val replaced = DocumentEditTool(tempDir).execute(
             args("path" to out.absolutePath, "operation" to "replace", "find" to "Hello world", "replacement" to "Goodbye world"),
         )
         assertTrue(replaced.ok)
@@ -112,7 +112,7 @@ class DocumentWriteToolsTest {
         assertTrue(read.output.contains("Goodbye world"))
         assertFalse(read.output.contains("Hello world"))
 
-        val missing = DocumentEditTool.execute(
+        val missing = DocumentEditTool(tempDir).execute(
             args("path" to out.absolutePath, "operation" to "replace", "find" to "no such phrase", "replacement" to "x"),
         )
         assertTrue(missing.ok)
@@ -123,7 +123,7 @@ class DocumentWriteToolsTest {
     fun editDocx_replaceFindsTextSplitAcrossRuns() = runBlocking {
         val out = File(tempDir, "split.docx")
         assertTrue(
-            DocumentCreateTool.execute(
+            DocumentCreateTool(tempDir).execute(
                 args("format" to "docx", "output_path" to out.absolutePath, "content" to "Hello world"),
             ).ok,
         )
@@ -135,7 +135,7 @@ class DocumentWriteToolsTest {
             "<w:t xml:space=\"preserve\">Hello </w:t></w:r><w:r><w:t xml:space=\"preserve\">world</w:t>",
         )
         assertTrue(rewritePackage(out, mapOf("word/document.xml" to split.toByteArray(Charsets.UTF_8))))
-        val replaced = DocumentEditTool.execute(
+        val replaced = DocumentEditTool(tempDir).execute(
             args("path" to out.absolutePath, "operation" to "replace", "find" to "Hello world", "replacement" to "Hi there"),
         )
         assertTrue(replaced.ok)
@@ -149,7 +149,7 @@ class DocumentWriteToolsTest {
     fun createXlsx_csvAndFormulaRoundTrip() = runBlocking {
         val out = File(tempDir, "budget.xlsx")
         val content = "Item,Qty,Price\n\"Apples, red\",5,1.5\nOranges,3,2\nTotal,,=SUM(C2:C3)"
-        val created = DocumentCreateTool.execute(
+        val created = DocumentCreateTool(tempDir).execute(
             args("format" to "xlsx", "output_path" to out.absolutePath, "content" to content),
         )
         assertTrue(created.ok)
@@ -170,11 +170,11 @@ class DocumentWriteToolsTest {
     fun editXlsx_appendRows() = runBlocking {
         val out = File(tempDir, "data.xlsx")
         assertTrue(
-            DocumentCreateTool.execute(
+            DocumentCreateTool(tempDir).execute(
                 args("format" to "xlsx", "output_path" to out.absolutePath, "content" to "Name,Score\nAna,10"),
             ).ok,
         )
-        val appended = DocumentEditTool.execute(
+        val appended = DocumentEditTool(tempDir).execute(
             args("path" to out.absolutePath, "operation" to "append", "content" to "Ben,20\nCara,30"),
         )
         assertTrue(appended.ok)
@@ -198,7 +198,7 @@ class DocumentWriteToolsTest {
     fun createPptx_slidesRoundTrip() = runBlocking {
         val out = File(tempDir, "deck.pptx")
         val content = "Opening\n- First point\n- Second point\n---\nClosing\n- Thanks"
-        val created = DocumentCreateTool.execute(
+        val created = DocumentCreateTool(tempDir).execute(
             args("format" to "pptx", "output_path" to out.absolutePath, "content" to content),
         )
         assertTrue(created.ok)
@@ -216,11 +216,11 @@ class DocumentWriteToolsTest {
     fun editPptx_appendSlide() = runBlocking {
         val out = File(tempDir, "deck2.pptx")
         assertTrue(
-            DocumentCreateTool.execute(
+            DocumentCreateTool(tempDir).execute(
                 args("format" to "pptx", "output_path" to out.absolutePath, "content" to "One\n- a"),
             ).ok,
         )
-        val appended = DocumentEditTool.execute(
+        val appended = DocumentEditTool(tempDir).execute(
             args("path" to out.absolutePath, "operation" to "append", "content" to "Two\n- b"),
         )
         assertTrue(appended.ok)
@@ -235,13 +235,37 @@ class DocumentWriteToolsTest {
     fun edit_replaceOnXlsxFailsPlainly() = runBlocking {
         val out = File(tempDir, "data2.xlsx")
         assertTrue(
-            DocumentCreateTool.execute(
+            DocumentCreateTool(tempDir).execute(
                 args("format" to "xlsx", "output_path" to out.absolutePath, "content" to "A,B\n1,2"),
             ).ok,
         )
-        val result = DocumentEditTool.execute(
+        val result = DocumentEditTool(tempDir).execute(
             args("path" to out.absolutePath, "operation" to "replace", "find" to "1", "replacement" to "9"),
         )
         assertFalse(result.ok)
+    }
+
+    // --- workspace paths (the reported bug: create, then read back) ---
+
+    @Test
+    fun createThenReadBack_viaWorkspacePath() = runBlocking {
+        val created = DocumentCreateTool(tempDir).execute(
+            args(
+                "format" to "pptx",
+                "output_path" to "/workspace/Exam_Sheet_40_Topics.pptx",
+                "content" to "Exam Sheet\n- Topic one\n- Topic two\n---\nSecond Slide\n- Topic three",
+            ),
+        )
+        assertTrue(created.ok)
+        assertTrue(File(tempDir, "Exam_Sheet_40_Topics.pptx").isFile)
+        val read = ReadDocumentTool(tempDir).execute(args("path" to "/workspace/Exam_Sheet_40_Topics.pptx"))
+        assertTrue(read.ok)
+        assertTrue(read.output.contains("[Slide 1]"))
+        assertTrue(read.output.contains("Topic one"))
+        assertTrue(read.output.contains("[Slide 2]"))
+        assertTrue(read.output.contains("Topic three"))
+        val bare = ReadDocumentTool(tempDir).execute(args("path" to "Exam_Sheet_40_Topics.pptx"))
+        assertTrue(bare.ok)
+        assertTrue(bare.output.contains("Topic one"))
     }
 }

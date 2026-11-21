@@ -61,6 +61,33 @@ internal fun JsonObject.existingFile(): File? {
 }
 
 /**
+ * Resolves a document path the way the agent means it. The model is told
+ * the workspace lives at `/workspace`, so it passes `/workspace/<rel>`,
+ * `workspace/<rel>`, or a bare workspace-relative name; the on-phone file
+ * lives under [workspaceRoot]. Absolute on-phone paths (`/data/...`,
+ * `/sdcard/...`) pass through unchanged. `..` escapes are rejected so a
+ * path can never leave the workspace root.
+ */
+internal fun resolveDocumentPath(rawPath: String, workspaceRoot: File): File {
+    val raw = rawPath.trim()
+    val rel = when {
+        raw.startsWith("/workspace/") -> raw.removePrefix("/workspace/")
+        raw == "/workspace" -> return workspaceRoot.canonicalFile
+        raw.startsWith("workspace/") -> raw.removePrefix("workspace/")
+        raw == "workspace" -> return workspaceRoot.canonicalFile
+        File(raw).isAbsolute -> return File(raw)
+        else -> raw
+    }
+    val root = workspaceRoot.canonicalFile
+    val target = File(root, rel).canonicalFile
+    val prefix = root.path + File.separator
+    if (target != root && !target.path.startsWith(prefix)) {
+        throw SecurityException("Path escapes workspace: $rawPath")
+    }
+    return target
+}
+
+/**
  * Parses a `pages` argument such as "all", "2", "1-3" or "1,3,5" into
  * the 1-based page numbers to read, or null when the value is malformed.
  * A legacy integer `page` argument (0 = all) is honoured when `pages`
@@ -115,7 +142,7 @@ internal fun parsePageSelection(args: JsonObject, pageCount: Int): List<Int>? {
  * scanned, image-only PDF) fails with a plain statement instead of
  * invented text — run `ocr_image` on such a page instead.
  */
-object ReadPdfTool : Tool {
+class ReadPdfTool(private val workspaceRoot: File) : Tool {
     override val name: String = "read_pdf"
     override val description: String =
         "Reads a PDF file and returns its page count, metadata, and the text of each page, labelled [p. N]. " +
@@ -125,7 +152,7 @@ object ReadPdfTool : Tool {
         putJsonObject("properties") {
             putJsonObject("path") {
                 put("type", "string")
-                put("description", "Absolute path of the PDF file to read")
+                put("description", "Path of the PDF file to read: an absolute on-phone path, a /workspace/... path, or a workspace-relative path")
             }
             putJsonObject("pages") {
                 put("type", "string")
@@ -138,7 +165,11 @@ object ReadPdfTool : Tool {
 
     override suspend fun execute(args: JsonObject): ToolResult {
         val path = args.pathArg() ?: return docFail("Missing required argument: path")
-        val file = File(path)
+        val file = try {
+            resolveDocumentPath(path, workspaceRoot)
+        } catch (e: SecurityException) {
+            return docFail(e.message ?: "Invalid path: $path")
+        }
         if (!file.isFile) return docFail("File not found: $path")
         return try {
             readPdfText(file, args)
@@ -280,7 +311,7 @@ internal fun unescapePdfLiteral(raw: String): String {
  * headings. Legacy binary formats (.doc/.xls/.ppt) and encrypted
  * (OLE2) files are rejected with a plain error, never guessed at.
  */
-object ReadDocumentTool : Tool {
+class ReadDocumentTool(private val workspaceRoot: File) : Tool {
     override val name: String = "read_document"
     override val description: String =
         "Reads a Word, Excel, or PowerPoint file (.docx, .xlsx, .pptx) and returns its text, tables, sheets, or slides. " +
@@ -290,7 +321,7 @@ object ReadDocumentTool : Tool {
         putJsonObject("properties") {
             putJsonObject("path") {
                 put("type", "string")
-                put("description", "Absolute path of the .docx, .xlsx, or .pptx file to read")
+                put("description", "Path of the .docx, .xlsx, or .pptx file to read: an absolute on-phone path, a /workspace/... path, or a workspace-relative path")
             }
         }
         putJsonArray("required") { add(JsonPrimitive("path")) }
@@ -299,7 +330,11 @@ object ReadDocumentTool : Tool {
 
     override suspend fun execute(args: JsonObject): ToolResult {
         val path = args.pathArg() ?: return docFail("Missing required argument: path")
-        val file = File(path)
+        val file = try {
+            resolveDocumentPath(path, workspaceRoot)
+        } catch (e: SecurityException) {
+            return docFail(e.message ?: "Invalid path: $path")
+        }
         if (!file.isFile) return docFail("File not found: $path")
         val extension = file.name.substringAfterLast('.', "").lowercase()
         return try {
@@ -540,7 +575,18 @@ internal fun parseOfficeXml(bytes: ByteArray): Document {
     setXmlFeatureQuietly(factory, "http://xml.org/sax/features/external-general-entities", false)
     setXmlFeatureQuietly(factory, "http://xml.org/sax/features/external-parameter-entities", false)
     setXmlFeatureQuietly(factory, "http://apache.org/xml/features/nonvalidating/load-external-dtd", false)
-    factory.isXIncludeAware = false
+    // Android's DocumentBuilderFactory ALWAYS throws UnsupportedOperationException
+    // from setXIncludeAware — even for false — because the platform parser has
+    // no XInclude support and its package reports specification "Unknown"
+    // version "0.0" (dd-plist #36, jOOX #149). XInclude is off by default, so
+    // skipping the call changes nothing; without the guard every Office read
+    // crashes on the phone before parsing a single byte. The JVM parser
+    // accepts the call, which is why unit tests never caught this.
+    try {
+        factory.isXIncludeAware = false
+    } catch (e: Exception) {
+        // Not supported on this platform; XInclude stays off.
+    }
     factory.isExpandEntityReferences = false
     return factory.newDocumentBuilder().parse(ByteArrayInputStream(bytes))
 }
@@ -597,7 +643,7 @@ internal fun childText(parent: Element, local: String): String {
  * instead of garbling it as UTF-8; a NUL byte in the first 8 KB of a
  * non-UTF-16 file rejects it as binary instead of returning garbage.
  */
-object ReadTextFileTool : Tool {
+class ReadTextFileTool(private val workspaceRoot: File) : Tool {
     override val name: String = "read_text_file"
     override val description: String =
         "Reads a plain text, Markdown, CSV, or code file as text (UTF-8 or UTF-16 with BOM). " +
@@ -607,7 +653,7 @@ object ReadTextFileTool : Tool {
         putJsonObject("properties") {
             putJsonObject("path") {
                 put("type", "string")
-                put("description", "Absolute path of the text file to read")
+                put("description", "Path of the text file to read: an absolute on-phone path, a /workspace/... path, or a workspace-relative path")
             }
         }
         putJsonArray("required") { add(JsonPrimitive("path")) }
@@ -616,7 +662,11 @@ object ReadTextFileTool : Tool {
 
     override suspend fun execute(args: JsonObject): ToolResult {
         val path = args.pathArg() ?: return docFail("Missing required argument: path")
-        val file = File(path)
+        val file = try {
+            resolveDocumentPath(path, workspaceRoot)
+        } catch (e: SecurityException) {
+            return docFail(e.message ?: "Invalid path: $path")
+        }
         if (!file.isFile) return docFail("File not found: $path")
         return try {
             readTextFileBytes(file)

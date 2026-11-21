@@ -50,6 +50,7 @@ import dev.codex.android.data.WorkspaceEntity
 import dev.codex.android.instructions.RepoInstructions
 import dev.codex.android.mcp.McpHub
 import dev.codex.android.memory.MemoryCommand
+import dev.codex.android.memory.MemorySaveTool
 import dev.codex.android.memory.MemorySearchTool
 import dev.codex.android.memory.PersonalMemory
 import dev.codex.android.memory.parseMemoryCommand
@@ -1545,6 +1546,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 .forEach(interactive::register)
         }
         if (personalMemory.isRecallEnabled()) interactive.register(MemorySearchTool(personalMemory))
+        // Memory save (chat-only): "save that to memory" needs a write tool —
+        // the agent previously had only memory_search, so it truthfully said
+        // it could not save. Registered here, never in withBuiltins, so no
+        // background run writes a note while the user is not asking for it.
+        interactive.register(MemorySaveTool(personalMemory::remember))
         interactive.register(AttachmentReadTool(application, fileLibrary, threadId))
         // Sub-agents (Worker T): the tool was the only missing piece —
         // the orchestrator already works. Registered chat-only (never in

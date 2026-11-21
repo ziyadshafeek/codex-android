@@ -555,7 +555,7 @@ internal fun buildPptx(title: String, content: String): List<Pair<String, ByteAr
  * Writes are real files the user can open in Word/Excel/PowerPoint or
  * LibreOffice — nothing here is a stub.
  */
-object DocumentCreateTool : Tool {
+class DocumentCreateTool(private val workspaceRoot: File) : Tool {
     override val name: String = "document_create"
     override val description: String =
         "Creates a new Word (.docx), Excel (.xlsx) or PowerPoint (.pptx) file from text content. " +
@@ -571,7 +571,7 @@ object DocumentCreateTool : Tool {
             }
             putJsonObject("output_path") {
                 put("type", "string")
-                put("description", "Absolute path to write, ending in .docx, .xlsx or .pptx")
+                put("description", "Path to write, ending in .docx, .xlsx or .pptx: an absolute on-phone path, a /workspace/... path, or a workspace-relative path")
             }
             putJsonObject("title") {
                 put("type", "string")
@@ -601,7 +601,11 @@ object DocumentCreateTool : Tool {
             return docFail("output_path must end in .$format")
         }
         return try {
-            val out = File(outputPath)
+            val out = try {
+                resolveDocumentPath(outputPath, workspaceRoot)
+            } catch (e: SecurityException) {
+                return docFail(e.message ?: "Invalid path: $outputPath")
+            }
             val entries = when (format) {
                 "docx" -> buildDocx(title.ifEmpty { out.nameWithoutExtension }, content)
                 "xlsx" -> buildXlsx(title.ifEmpty { out.nameWithoutExtension }, content)
@@ -633,7 +637,7 @@ object DocumentCreateTool : Tool {
  * Only the XML part that changes is rewritten; every other part of the
  * package is copied byte-for-byte.
  */
-object DocumentEditTool : Tool {
+class DocumentEditTool(private val workspaceRoot: File) : Tool {
     override val name: String = "document_edit"
     override val description: String =
         "Edits an existing .docx, .xlsx or .pptx file. Operation 'append' adds paragraphs (docx), CSV rows (xlsx) or slides (pptx). " +
@@ -643,7 +647,7 @@ object DocumentEditTool : Tool {
         putJsonObject("properties") {
             putJsonObject("path") {
                 put("type", "string")
-                put("description", "Absolute path of the .docx, .xlsx, or .pptx file to edit")
+                put("description", "Path of the .docx, .xlsx, or .pptx file to edit: an absolute on-phone path, a /workspace/... path, or a workspace-relative path")
             }
             putJsonObject("operation") {
                 put("type", "string")
@@ -668,7 +672,11 @@ object DocumentEditTool : Tool {
 
     override suspend fun execute(args: JsonObject): ToolResult {
         val path = args.pathArg() ?: return docFail("Missing required argument: path")
-        val file = File(path)
+        val file = try {
+            resolveDocumentPath(path, workspaceRoot)
+        } catch (e: SecurityException) {
+            return docFail(e.message ?: "Invalid path: $path")
+        }
         if (!file.isFile) return docFail("File not found: $path")
         val operation = args["operation"]?.jsonPrimitive?.contentOrNull?.trim()?.lowercase()
             ?: return docFail("Missing required argument: operation")
@@ -825,7 +833,9 @@ object DocumentEditTool : Tool {
 }
 
 /** Convenience: every tool this file defines, in registration order. */
-internal val DOCUMENT_WRITE_TOOLS: List<Tool> = listOf(DocumentCreateTool, DocumentEditTool)
+internal fun documentWriteTools(workspaceRoot: File): List<Tool> =
+    listOf(DocumentCreateTool(workspaceRoot), DocumentEditTool(workspaceRoot))
 
 /** Convenience: every standalone document-reading tool, in registration order. */
-internal val DOCUMENT_READ_TOOLS: List<Tool> = listOf(ReadPdfTool, ReadDocumentTool, ReadTextFileTool)
+internal fun documentReadTools(workspaceRoot: File): List<Tool> =
+    listOf(ReadPdfTool(workspaceRoot), ReadDocumentTool(workspaceRoot), ReadTextFileTool(workspaceRoot))

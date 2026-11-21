@@ -13,7 +13,13 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
-/** Durable notes are opt-in writes from the person, not from model or tool output. */
+/**
+ * Durable notes are opt-in writes from the person. The person writes
+ * directly (`/remember ...`, the Notes tab), or asks the agent in chat
+ * to save something (the `memory_save` tool, chat-only, which only fires
+ * on an explicit ask). The model never saves a note unprompted, and
+ * [remember] still refuses anything credential-looking.
+ */
 class PersonalMemory(context: Context) {
     private val store = MemoryStore(context)
     private val settings = KeyStore(context)

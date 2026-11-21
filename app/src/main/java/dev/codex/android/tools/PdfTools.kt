@@ -37,8 +37,12 @@ import kotlinx.serialization.json.putJsonObject
  * [savePdf]) live here so the tools stay thin.
  */
 
-internal fun loadPdf(path: String): PDDocument? {
-    val file = File(path)
+internal fun loadPdf(path: String, workspaceRoot: File): PDDocument? {
+    val file = try {
+        resolveDocumentPath(path, workspaceRoot)
+    } catch (e: SecurityException) {
+        return null
+    }
     if (!file.isFile) return null
     return try {
         PDDocument.load(file)
@@ -49,9 +53,9 @@ internal fun loadPdf(path: String): PDDocument? {
     }
 }
 
-internal fun savePdf(doc: PDDocument, outputPath: String): ToolResult {
+internal fun savePdf(doc: PDDocument, outputPath: String, workspaceRoot: File): ToolResult {
     return try {
-        val out = File(outputPath)
+        val out = resolveDocumentPath(outputPath, workspaceRoot)
         out.parentFile?.mkdirs()
         doc.save(out)
         ToolResult(ok = true, output = "Wrote ${out.absolutePath} (${out.length()} bytes)")
@@ -112,13 +116,13 @@ private fun pdfArgsSchema(
  * blank lines separate paragraphs). One A4 page per chunk of text;
  * long lines wrap at ~95 characters. No images — a text-only PDF.
  */
-object PdfCreateTool : Tool {
+class PdfCreateTool(private val workspaceRoot: File) : Tool {
     override val name: String = "pdf_create"
     override val description: String =
         "Creates a PDF file from plain text. Headings use '# ' lines; blank lines separate paragraphs. " +
             "Use for reports, letters, and notes the user wants as a PDF."
     override val parametersSchema: JsonObject = pdfArgsSchema(
-        Triple("output_path", "string", "Absolute path to write, ending in .pdf"),
+        Triple("output_path", "string", "Path to write, ending in .pdf: an absolute on-phone path, a /workspace/... path, or a workspace-relative path"),
         Triple("content", "string", "The text to put in the PDF ('# ' lines become headings)"),
         Triple("title", "string", "Title stored in the PDF metadata (optional)"),
         required = listOf("output_path", "content"),
@@ -138,7 +142,7 @@ object PdfCreateTool : Tool {
                 val title = args["title"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
                 if (title.isNotEmpty()) doc.documentInformation.title = title
                 writeTextToPdf(doc, content)
-                savePdf(doc, outputPath)
+                savePdf(doc, outputPath, workspaceRoot)
             }
         } catch (e: Exception) {
             docFail("Could not create PDF: ${e.message ?: e.javaClass.simpleName}")
@@ -230,7 +234,7 @@ internal fun wrapLine(
  * inputs are rejected with a plain error; the output path must end
  * in .pdf.
  */
-object PdfMergeTool : Tool {
+class PdfMergeTool(private val workspaceRoot: File) : Tool {
     override val name: String = "pdf_merge"
     override val description: String =
         "Merges two or more PDF files into a single PDF, in the order given."
@@ -239,12 +243,12 @@ object PdfMergeTool : Tool {
         putJsonObject("properties") {
             putJsonObject("inputs") {
                 put("type", "array")
-                put("description", "Absolute paths of the PDF files to merge, in order (at least 2)")
+                put("description", "Paths of the PDF files to merge, in order (at least 2): absolute on-phone paths, /workspace/... paths, or workspace-relative paths")
                 putJsonObject("items") { put("type", "string") }
             }
             putJsonObject("output_path") {
                 put("type", "string")
-                put("description", "Absolute path to write, ending in .pdf")
+                put("description", "Path to write, ending in .pdf: an absolute on-phone path, a /workspace/... path, or a workspace-relative path")
             }
         }
         putJsonArray("required") { add(JsonPrimitive("inputs")); add(JsonPrimitive("output_path")) }
@@ -260,13 +264,24 @@ object PdfMergeTool : Tool {
         if (!outputPath.endsWith(".pdf", ignoreCase = true)) {
             return docFail("output_path must end in .pdf")
         }
+        val resolvedInputs = mutableListOf<File>()
         for (input in inputs) {
-            if (!File(input).isFile) return docFail("File not found: $input")
+            val file = try {
+                resolveDocumentPath(input, workspaceRoot)
+            } catch (e: SecurityException) {
+                return docFail(e.message ?: "Invalid path: $input")
+            }
+            if (!file.isFile) return docFail("File not found: $input")
+            resolvedInputs += file
         }
         return try {
             val merger = PDFMergerUtility()
-            for (input in inputs) merger.addSource(File(input))
-            val out = File(outputPath)
+            for (file in resolvedInputs) merger.addSource(file)
+            val out = try {
+                resolveDocumentPath(outputPath, workspaceRoot)
+            } catch (e: SecurityException) {
+                return docFail(e.message ?: "Invalid path: $outputPath")
+            }
             out.parentFile?.mkdirs()
             merger.destinationFileName = out.absolutePath
             merger.mergeDocuments()
@@ -288,14 +303,14 @@ object PdfMergeTool : Tool {
  * one PDF containing the requested pages; with `per_page` true it writes
  * one PDF per page into `output_dir` named `<base>-p<N>.pdf`.
  */
-object PdfSplitTool : Tool {
+class PdfSplitTool(private val workspaceRoot: File) : Tool {
     override val name: String = "pdf_split"
     override val description: String =
         "Splits a PDF by page range. Default writes one PDF with the requested pages; with per_page true, writes one PDF per page into output_dir."
     override val parametersSchema: JsonObject = pdfArgsSchema(
-        Triple("path", "string", "Absolute path of the PDF to split"),
+        Triple("path", "string", "Path of the PDF to split: an absolute on-phone path, a /workspace/... path, or a workspace-relative path"),
         Triple("pages", "string", "Pages to keep: \"all\", \"2\", a range like \"1-3\", or a list like \"1,3,5\" (default \"all\")"),
-        Triple("output_path", "string", "Absolute path to write when per_page is false, ending in .pdf"),
+        Triple("output_path", "string", "Path to write when per_page is false, ending in .pdf: an absolute on-phone path, a /workspace/... path, or a workspace-relative path"),
         Triple("output_dir", "string", "Directory to write per-page PDFs into when per_page is true"),
         Triple("per_page", "boolean", "When true, write one PDF per page instead of a single PDF"),
         required = listOf("path"),
@@ -305,7 +320,11 @@ object PdfSplitTool : Tool {
     override suspend fun execute(args: JsonObject): ToolResult {
         val path = args["path"]?.jsonPrimitive?.contentOrNull?.trim()
             ?: return docFail("Missing required argument: path")
-        val file = File(path)
+        val file = try {
+            resolveDocumentPath(path, workspaceRoot)
+        } catch (e: SecurityException) {
+            return docFail(e.message ?: "Invalid path: $path")
+        }
         if (!file.isFile) return docFail("File not found: $path")
         val perPage = args["per_page"]?.jsonPrimitive?.booleanOrNull ?: false
         return try {
@@ -315,10 +334,14 @@ object PdfSplitTool : Tool {
                 val pages = parsePdfPages(args["pages"]?.jsonPrimitive?.contentOrNull, pageCount)
                     ?: return docFail("Invalid pages selection for a $pageCount-page PDF.")
                 if (perPage) {
-                    val dir = File(
-                        args["output_dir"]?.jsonPrimitive?.contentOrNull?.trim()
-                            ?: return docFail("per_page needs output_dir."),
-                    ).apply { mkdirs() }
+                    val dirRaw = args["output_dir"]?.jsonPrimitive?.contentOrNull?.trim()
+                        ?: return docFail("per_page needs output_dir.")
+                    val dir = try {
+                        resolveDocumentPath(dirRaw, workspaceRoot)
+                    } catch (e: SecurityException) {
+                        return docFail(e.message ?: "Invalid path: $dirRaw")
+                    }
+                    dir.mkdirs()
                     val base = file.nameWithoutExtension
                     val written = mutableListOf<String>()
                     for (pageNumber in pages) {
@@ -342,7 +365,7 @@ object PdfSplitTool : Tool {
                     val out = PDDocument()
                     try {
                         for (pageNumber in pages) out.importPage(doc.getPage(pageNumber - 1))
-                        savePdf(out, outputPath)
+                        savePdf(out, outputPath, workspaceRoot)
                     } finally {
                         out.close()
                     }
@@ -364,15 +387,15 @@ object PdfSplitTool : Tool {
  * Rotates pages of a PDF by 90, 180 or 270 degrees (clockwise) and
  * writes the result to a new file. The input file is never modified.
  */
-object PdfRotateTool : Tool {
+class PdfRotateTool(private val workspaceRoot: File) : Tool {
     override val name: String = "pdf_rotate"
     override val description: String =
         "Rotates pages of a PDF by 90, 180 or 270 degrees clockwise and writes the result to a new file. The input file is never modified."
     override val parametersSchema: JsonObject = pdfArgsSchema(
-        Triple("path", "string", "Absolute path of the PDF to rotate"),
+        Triple("path", "string", "Path of the PDF to rotate: an absolute on-phone path, a /workspace/... path, or a workspace-relative path"),
         Triple("pages", "string", "Pages to rotate: \"all\", \"2\", a range like \"1-3\", or a list like \"1,3,5\" (default \"all\")"),
         Triple("degrees", "integer", "Rotation in degrees clockwise: 90, 180 or 270"),
-        Triple("output_path", "string", "Absolute path to write, ending in .pdf"),
+        Triple("output_path", "string", "Path to write, ending in .pdf: an absolute on-phone path, a /workspace/... path, or a workspace-relative path"),
         required = listOf("path", "degrees", "output_path"),
     )
     override val sensitive: Boolean = true
@@ -380,7 +403,11 @@ object PdfRotateTool : Tool {
     override suspend fun execute(args: JsonObject): ToolResult {
         val path = args["path"]?.jsonPrimitive?.contentOrNull?.trim()
             ?: return docFail("Missing required argument: path")
-        val file = File(path)
+        val file = try {
+            resolveDocumentPath(path, workspaceRoot)
+        } catch (e: SecurityException) {
+            return docFail(e.message ?: "Invalid path: $path")
+        }
         if (!file.isFile) return docFail("File not found: $path")
         val degrees = args["degrees"]?.jsonPrimitive?.intOrNull
             ?: return docFail("Missing required argument: degrees")
@@ -401,7 +428,7 @@ object PdfRotateTool : Tool {
                     val page = doc.getPage(pageNumber - 1)
                     page.rotation = (page.rotation + degrees) % 360
                 }
-                savePdf(doc, outputPath)
+                savePdf(doc, outputPath, workspaceRoot)
             }
         } catch (e: InvalidPasswordException) {
             docFail("This PDF is encrypted and cannot be rotated.")
@@ -423,7 +450,7 @@ object PdfRotateTool : Tool {
  * by `list`/`get` but `set` on them fails plainly. The input file is
  * never modified — `set` always writes a new file.
  */
-object PdfFormsTool : Tool {
+class PdfFormsTool(private val workspaceRoot: File) : Tool {
     override val name: String = "pdf_forms"
     override val description: String =
         "Reads or writes PDF form (AcroForm) fields. Operation 'list' shows every field and value, 'get' reads one field, 'set' writes the given text fields to a new PDF."
@@ -432,7 +459,7 @@ object PdfFormsTool : Tool {
         putJsonObject("properties") {
             putJsonObject("path") {
                 put("type", "string")
-                put("description", "Absolute path of the PDF with the form")
+                put("description", "Path of the PDF with the form: an absolute on-phone path, a /workspace/... path, or a workspace-relative path")
             }
             putJsonObject("operation") {
                 put("type", "string")
@@ -448,7 +475,7 @@ object PdfFormsTool : Tool {
             }
             putJsonObject("output_path") {
                 put("type", "string")
-                put("description", "Absolute path to write for the set operation, ending in .pdf")
+                put("description", "Path to write for the set operation, ending in .pdf: an absolute on-phone path, a /workspace/... path, or a workspace-relative path")
             }
         }
         putJsonArray("required") { add(JsonPrimitive("path")); add(JsonPrimitive("operation")) }
@@ -458,7 +485,11 @@ object PdfFormsTool : Tool {
     override suspend fun execute(args: JsonObject): ToolResult {
         val path = args["path"]?.jsonPrimitive?.contentOrNull?.trim()
             ?: return docFail("Missing required argument: path")
-        val file = File(path)
+        val file = try {
+            resolveDocumentPath(path, workspaceRoot)
+        } catch (e: SecurityException) {
+            return docFail(e.message ?: "Invalid path: $path")
+        }
         if (!file.isFile) return docFail("File not found: $path")
         val operation = args["operation"]?.jsonPrimitive?.contentOrNull?.trim()?.lowercase()
             ?: return docFail("Missing required argument: operation")
@@ -494,8 +525,8 @@ object PdfFormsTool : Tool {
                             field.setValue(value.jsonPrimitive.contentOrNull.orEmpty())
                             set += name
                         }
-                        savePdf(doc, outputPath).let { result ->
-                            if (result.ok) ToolResult(ok = true, output = "Set ${set.size} field(s) (${set.joinToString(", ")}) and wrote ${File(outputPath).absolutePath}")
+                        savePdf(doc, outputPath, workspaceRoot).let { result ->
+                            if (result.ok) ToolResult(ok = true, output = "Set ${set.size} field(s) (${set.joinToString(", ")}) and wrote ${resolveDocumentPath(outputPath, workspaceRoot).absolutePath}")
                             else result
                         }
                     }
@@ -522,6 +553,10 @@ object PdfFormsTool : Tool {
 }
 
 /** Convenience: every PDF tool this file defines, in registration order. */
-internal val PDF_TOOLS: List<Tool> = listOf(
-    PdfCreateTool, PdfMergeTool, PdfSplitTool, PdfRotateTool, PdfFormsTool,
+internal fun pdfTools(workspaceRoot: File): List<Tool> = listOf(
+    PdfCreateTool(workspaceRoot),
+    PdfMergeTool(workspaceRoot),
+    PdfSplitTool(workspaceRoot),
+    PdfRotateTool(workspaceRoot),
+    PdfFormsTool(workspaceRoot),
 )

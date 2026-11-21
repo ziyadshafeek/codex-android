@@ -17,6 +17,7 @@ import kotlinx.serialization.json.put
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -87,7 +88,7 @@ class DocumentToolsTest {
     @Test
     fun readPdf_allPagesLabelledWithPageNumbers() = runBlocking {
         val file = writePdf("three.pdf", listOf("Alpha page one", "Beta page two", "Gamma page three"))
-        val result = ReadPdfTool.execute(args("path" to file.absolutePath, "pages" to "all"))
+        val result = ReadPdfTool(tempDir).execute(args("path" to file.absolutePath, "pages" to "all"))
         assertTrue(result.ok)
         assertTrue(result.output.contains("Pages: 3"))
         assertTrue(result.output.contains("[p. 1]"))
@@ -101,17 +102,17 @@ class DocumentToolsTest {
     @Test
     fun readPdf_singlePageAndRange() = runBlocking {
         val file = writePdf("three.pdf", listOf("Alpha page one", "Beta page two", "Gamma page three"))
-        val one = ReadPdfTool.execute(args("path" to file.absolutePath, "pages" to "2"))
+        val one = ReadPdfTool(tempDir).execute(args("path" to file.absolutePath, "pages" to "2"))
         assertTrue(one.ok)
         assertTrue(one.output.contains("Beta page two"))
         assertFalse(one.output.contains("Alpha page one"))
         assertFalse(one.output.contains("Gamma page three"))
-        val range = ReadPdfTool.execute(args("path" to file.absolutePath, "pages" to "1-2"))
+        val range = ReadPdfTool(tempDir).execute(args("path" to file.absolutePath, "pages" to "1-2"))
         assertTrue(range.ok)
         assertTrue(range.output.contains("Alpha page one"))
         assertTrue(range.output.contains("Beta page two"))
         assertFalse(range.output.contains("Gamma page three"))
-        val list = ReadPdfTool.execute(args("path" to file.absolutePath, "pages" to "1,3"))
+        val list = ReadPdfTool(tempDir).execute(args("path" to file.absolutePath, "pages" to "1,3"))
         assertTrue(list.ok)
         assertTrue(list.output.contains("Alpha page one"))
         assertTrue(list.output.contains("Gamma page three"))
@@ -121,16 +122,16 @@ class DocumentToolsTest {
     @Test
     fun readPdf_outOfRangeAndMalformedPagesFail() = runBlocking {
         val file = writePdf("two.pdf", listOf("One", "Two"))
-        assertFalse(ReadPdfTool.execute(args("path" to file.absolutePath, "pages" to "99")).ok)
-        assertFalse(ReadPdfTool.execute(args("path" to file.absolutePath, "pages" to "3-1")).ok)
-        assertFalse(ReadPdfTool.execute(args("path" to file.absolutePath, "pages" to "abc")).ok)
-        assertFalse(ReadPdfTool.execute(args("path" to file.absolutePath, "pages" to "0")).ok)
+        assertFalse(ReadPdfTool(tempDir).execute(args("path" to file.absolutePath, "pages" to "99")).ok)
+        assertFalse(ReadPdfTool(tempDir).execute(args("path" to file.absolutePath, "pages" to "3-1")).ok)
+        assertFalse(ReadPdfTool(tempDir).execute(args("path" to file.absolutePath, "pages" to "abc")).ok)
+        assertFalse(ReadPdfTool(tempDir).execute(args("path" to file.absolutePath, "pages" to "0")).ok)
     }
 
     @Test
     fun readPdf_missingFileAndMissingArgFail() = runBlocking {
-        assertFalse(ReadPdfTool.execute(args("path" to File(tempDir, "nope.pdf").absolutePath)).ok)
-        assertFalse(ReadPdfTool.execute(buildJsonObject { }).ok)
+        assertFalse(ReadPdfTool(tempDir).execute(args("path" to File(tempDir, "nope.pdf").absolutePath)).ok)
+        assertFalse(ReadPdfTool(tempDir).execute(buildJsonObject { }).ok)
     }
 
     @Test
@@ -140,7 +141,7 @@ class DocumentToolsTest {
             doc.addPage(PDPage(PDRectangle.A4))
             doc.save(file)
         }
-        val result = ReadPdfTool.execute(args("path" to file.absolutePath))
+        val result = ReadPdfTool(tempDir).execute(args("path" to file.absolutePath))
         assertFalse(result.ok)
         assertTrue(result.error?.contains("scanned") == true)
     }
@@ -161,7 +162,7 @@ class DocumentToolsTest {
             doc.protect(StandardProtectionPolicy("owner-pass", "user-pass", AccessPermission()))
             doc.save(file)
         }
-        val result = ReadPdfTool.execute(args("path" to file.absolutePath))
+        val result = ReadPdfTool(tempDir).execute(args("path" to file.absolutePath))
         assertFalse(result.ok)
         assertTrue(result.error?.contains("encrypted") == true)
     }
@@ -195,7 +196,7 @@ class DocumentToolsTest {
 
     @Test
     fun readDocument_docxParagraphsAndTable() = runBlocking {
-        val result = ReadDocumentTool.execute(args("path" to docxFixture().absolutePath))
+        val result = ReadDocumentTool(tempDir).execute(args("path" to docxFixture().absolutePath))
         assertTrue(result.ok)
         assertTrue(result.output.contains("First paragraph"))
         assertTrue(result.output.contains("Second paragraph"))
@@ -232,7 +233,7 @@ class DocumentToolsTest {
 
     @Test
     fun readDocument_xlsxSheetsAndCellTypes() = runBlocking {
-        val result = ReadDocumentTool.execute(args("path" to xlsxFixture().absolutePath))
+        val result = ReadDocumentTool(tempDir).execute(args("path" to xlsxFixture().absolutePath))
         assertTrue(result.ok)
         assertTrue(result.output.contains("[Sheet: Data]"))
         assertTrue(result.output.contains("Item | Apple"))
@@ -257,7 +258,7 @@ class DocumentToolsTest {
 
     @Test
     fun readDocument_pptxSlidesInOrder() = runBlocking {
-        val result = ReadDocumentTool.execute(args("path" to pptxFixture().absolutePath))
+        val result = ReadDocumentTool(tempDir).execute(args("path" to pptxFixture().absolutePath))
         assertTrue(result.ok)
         assertTrue(result.output.contains("[Slide 1]"))
         assertTrue(result.output.contains("Opening slide"))
@@ -272,23 +273,23 @@ class DocumentToolsTest {
     @Test
     fun readDocument_legacyAndEncryptedAndInvalidFail() = runBlocking {
         val legacy = File(tempDir, "old.doc").apply { writeBytes(byteArrayOf(0xD0.toByte(), 0xCF.toByte(), 0x11.toByte(), 0xE0.toByte(), 0, 0)) }
-        val legacyResult = ReadDocumentTool.execute(args("path" to legacy.absolutePath))
+        val legacyResult = ReadDocumentTool(tempDir).execute(args("path" to legacy.absolutePath))
         assertFalse(legacyResult.ok)
         assertTrue(legacyResult.error?.contains("not supported") == true)
 
         val fakeDocx = File(tempDir, "fake.docx").apply { writeText("this is not a zip") }
-        val fakeResult = ReadDocumentTool.execute(args("path" to fakeDocx.absolutePath))
+        val fakeResult = ReadDocumentTool(tempDir).execute(args("path" to fakeDocx.absolutePath))
         assertFalse(fakeResult.ok)
 
         val oleDocx = File(tempDir, "ole.docx").apply {
             writeBytes(byteArrayOf(0xD0.toByte(), 0xCF.toByte(), 0x11.toByte(), 0xE0.toByte(), 0, 0, 0, 0))
         }
-        val oleResult = ReadDocumentTool.execute(args("path" to oleDocx.absolutePath))
+        val oleResult = ReadDocumentTool(tempDir).execute(args("path" to oleDocx.absolutePath))
         assertFalse(oleResult.ok)
         assertTrue(oleResult.error?.contains("encrypted") == true)
 
         val txt = File(tempDir, "notes.txt").apply { writeText("hello") }
-        assertFalse(ReadDocumentTool.execute(args("path" to txt.absolutePath)).ok)
+        assertFalse(ReadDocumentTool(tempDir).execute(args("path" to txt.absolutePath)).ok)
     }
 
     // --- read_text_file ---
@@ -296,28 +297,28 @@ class DocumentToolsTest {
     @Test
     fun readTextFile_utf8Utf16AndBinary() = runBlocking {
         val utf8 = File(tempDir, "a.txt").apply { writeText("Hello\nWorld", Charsets.UTF_8) }
-        val utf8Result = ReadTextFileTool.execute(args("path" to utf8.absolutePath))
+        val utf8Result = ReadTextFileTool(tempDir).execute(args("path" to utf8.absolutePath))
         assertTrue(utf8Result.ok)
         assertTrue(utf8Result.output.contains("Hello\nWorld"))
 
         val utf16le = File(tempDir, "b.txt").apply {
             writeBytes(byteArrayOf(0xFF.toByte(), 0xFE.toByte()) + "Hello UTF-16LE".toByteArray(Charsets.UTF_16LE))
         }
-        val leResult = ReadTextFileTool.execute(args("path" to utf16le.absolutePath))
+        val leResult = ReadTextFileTool(tempDir).execute(args("path" to utf16le.absolutePath))
         assertTrue(leResult.ok)
         assertTrue(leResult.output.contains("Hello UTF-16LE"))
 
         val utf16be = File(tempDir, "c.txt").apply {
             writeBytes(byteArrayOf(0xFE.toByte(), 0xFF.toByte()) + "Hello UTF-16BE".toByteArray(Charsets.UTF_16BE))
         }
-        val beResult = ReadTextFileTool.execute(args("path" to utf16be.absolutePath))
+        val beResult = ReadTextFileTool(tempDir).execute(args("path" to utf16be.absolutePath))
         assertTrue(beResult.ok)
         assertTrue(beResult.output.contains("Hello UTF-16BE"))
 
         val binary = File(tempDir, "d.bin").apply {
             writeBytes("text\u0000binary".toByteArray(Charsets.UTF_8))
         }
-        val binaryResult = ReadTextFileTool.execute(args("path" to binary.absolutePath))
+        val binaryResult = ReadTextFileTool(tempDir).execute(args("path" to binary.absolutePath))
         assertFalse(binaryResult.ok)
         assertTrue(binaryResult.error?.contains("binary") == true)
     }
@@ -325,9 +326,50 @@ class DocumentToolsTest {
     @Test
     fun readTextFile_twoMegabyteCap() = runBlocking {
         val big = File(tempDir, "big.txt").apply { writeText("x".repeat(3 * 1024 * 1024)) }
-        val result = ReadTextFileTool.execute(args("path" to big.absolutePath))
+        val result = ReadTextFileTool(tempDir).execute(args("path" to big.absolutePath))
         assertTrue(result.ok)
         assertTrue(result.output.contains("[truncated"))
         assertTrue(result.output.length <= 100_000 + 100)
+    }
+
+    // --- path resolution (the reported bug: /workspace/... and bare names) ---
+
+    @Test
+    fun resolveDocumentPath_workspacePrefixedAndRelative() {
+        val expected = File(tempDir, "deck.pptx").canonicalFile
+        assertEquals(expected, resolveDocumentPath("/workspace/deck.pptx", tempDir))
+        assertEquals(expected, resolveDocumentPath("workspace/deck.pptx", tempDir))
+        assertEquals(expected, resolveDocumentPath("deck.pptx", tempDir))
+        assertEquals(
+            File(tempDir, "sub/deck.pptx").canonicalFile,
+            resolveDocumentPath("/workspace/sub/deck.pptx", tempDir),
+        )
+    }
+
+    @Test
+    fun resolveDocumentPath_absolutePassesThrough() {
+        val abs = File(tempDir, "deck.pptx").absolutePath
+        assertEquals(File(abs), resolveDocumentPath(abs, tempDir))
+    }
+
+    @Test
+    fun resolveDocumentPath_dotDotEscapesRejected() {
+        assertThrows(SecurityException::class.java) { resolveDocumentPath("../escape.pptx", tempDir) }
+        assertThrows(SecurityException::class.java) { resolveDocumentPath("/workspace/../escape.pptx", tempDir) }
+        assertThrows(SecurityException::class.java) { resolveDocumentPath("sub/../../escape.pptx", tempDir) }
+    }
+
+    @Test
+    fun readDocument_workspacePathAndBareNameReadBack() = runBlocking {
+        val file = pptxFixture()
+        val viaWorkspace = ReadDocumentTool(tempDir).execute(args("path" to "/workspace/${file.name}"))
+        assertTrue(viaWorkspace.ok)
+        assertTrue(viaWorkspace.output.contains("Opening slide"))
+        val viaBareName = ReadDocumentTool(tempDir).execute(args("path" to file.name))
+        assertTrue(viaBareName.ok)
+        assertTrue(viaBareName.output.contains("Closing slide"))
+        val escape = ReadDocumentTool(tempDir).execute(args("path" to "/workspace/../escape.pptx"))
+        assertFalse(escape.ok)
+        assertTrue(escape.error?.contains("escapes workspace") == true)
     }
 }
