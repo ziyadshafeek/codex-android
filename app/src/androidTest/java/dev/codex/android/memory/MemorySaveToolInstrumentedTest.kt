@@ -34,8 +34,11 @@ class MemorySaveToolInstrumentedTest {
     }
 
     @After
-    fun tearDown() = runBlocking {
-        memory.clear()
+    fun tearDown() {
+        // Block body (not `= runBlocking { ... }`): JUnit requires @After
+        // methods to return void, and runBlocking would return the Boolean
+        // from memory.clear().
+        runBlocking { memory.clear() }
     }
 
     private fun args(vararg pairs: Pair<String, String>) = buildJsonObject {
